@@ -165,20 +165,50 @@ export default function Onboarding() {
           <Card>
             <CardHeader>
               <CardTitle>Найдите свою организацию</CardTitle>
-              <CardDescription>Введите название и город — мы найдём карточку в Яндекс Бизнесе.</CardDescription>
+              <CardDescription>Введите название и город или вставьте прямую ссылку на карточку в Яндекс Картах.</CardDescription>
             </CardHeader>
             <CardContent className="space-y-4">
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+              <div className="flex gap-2 text-sm">
+                <button
+                  type="button"
+                  onClick={() => setMode("search")}
+                  className={`px-3 py-1.5 rounded-lg border ${mode === "search" ? "border-primary bg-primary/5 font-medium" : "border-border text-muted-foreground"}`}
+                >
+                  Поиск
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setMode("url")}
+                  className={`px-3 py-1.5 rounded-lg border ${mode === "url" ? "border-primary bg-primary/5 font-medium" : "border-border text-muted-foreground"}`}
+                >
+                  По ссылке
+                </button>
+              </div>
+
+              {mode === "search" ? (
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                  <Input
+                    className="sm:col-span-2"
+                    placeholder="Название (например, Стоматология Улыбка)"
+                    value={query}
+                    onChange={(e) => setQuery(e.target.value)}
+                    onKeyDown={(e) => e.key === "Enter" && search()}
+                  />
+                  <Input placeholder="Город" value={city} onChange={(e) => setCity(e.target.value)} />
+                </div>
+              ) : (
                 <Input
-                  className="sm:col-span-2"
-                  placeholder="Название (например, Стоматология Улыбка)"
-                  value={query}
-                  onChange={(e) => setQuery(e.target.value)}
+                  placeholder="https://yandex.ru/maps/org/.../1234567890/"
+                  value={orgUrl}
+                  onChange={(e) => setOrgUrl(e.target.value)}
                   onKeyDown={(e) => e.key === "Enter" && search()}
                 />
-                <Input placeholder="Город" value={city} onChange={(e) => setCity(e.target.value)} />
-              </div>
-              <Button onClick={search} disabled={searching || !query.trim()}>
+              )}
+
+              <Button
+                onClick={search}
+                disabled={searching || (mode === "search" ? !query.trim() : !orgUrl.trim())}
+              >
                 {searching ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <Search className="h-4 w-4 mr-2" />}
                 Найти
               </Button>
