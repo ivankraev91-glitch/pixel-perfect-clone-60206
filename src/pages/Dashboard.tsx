@@ -67,6 +67,20 @@ export default function Dashboard() {
 
   useEffect(() => { if (user) load(); /* eslint-disable-next-line */ }, [user]);
 
+  // Realtime: refresh on new checks
+  useEffect(() => {
+    if (!user) return;
+    const ch = supabase
+      .channel("checks-rt")
+      .on("postgres_changes", { event: "INSERT", schema: "public", table: "checks" }, () => {
+        load();
+        toast.success("Получен новый результат проверки");
+      })
+      .subscribe();
+    return () => { supabase.removeChannel(ch); };
+    // eslint-disable-next-line
+  }, [user]);
+
   const runCheck = async () => {
     if (!org || !selKw || !selGp) return;
     setRunning(true);
@@ -76,13 +90,12 @@ export default function Dashboard() {
     setRunning(false);
     setDialogOpen(false);
     if (error) {
-      // Try to surface server error message
       try {
         const errorContext = (error as any).context;
         if (errorContext?.json) {
           const j = await errorContext.json();
-          if (j?.error === "rate_limited") {
-            toast.error(`Подождите ещё ${j.retry_after_seconds} сек до следующей проверки`);
+          if (j?.error === "daily_limit_reached") {
+            toast.error(`Достигнут дневной лимит (${j.limit} проверок)`);
             return;
           }
           toast.error(j?.error || error.message);
@@ -92,9 +105,11 @@ export default function Dashboard() {
       toast.error(error.message);
       return;
     }
-    setLastResult(data);
-    setResultOpen(true);
-    load();
+    if (data?.deduplicated) {
+      toast.info("Такая проверка уже в очереди");
+    } else {
+      toast.success("Проверка поставлена в очередь — обычно 10–60 секунд");
+    }
   };
 
   if (loading) {
