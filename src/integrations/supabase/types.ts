@@ -14,7 +14,170 @@ export type Database = {
   }
   public: {
     Tables: {
-      [_ in never]: never
+      checks: {
+        Row: {
+          checked_at: string
+          geopoint_id: string
+          id: string
+          keyword_id: string
+          org_id: string
+          position: number | null
+          raw_response: Json | null
+          total_results: number | null
+          user_id: string
+        }
+        Insert: {
+          checked_at?: string
+          geopoint_id: string
+          id?: string
+          keyword_id: string
+          org_id: string
+          position?: number | null
+          raw_response?: Json | null
+          total_results?: number | null
+          user_id: string
+        }
+        Update: {
+          checked_at?: string
+          geopoint_id?: string
+          id?: string
+          keyword_id?: string
+          org_id?: string
+          position?: number | null
+          raw_response?: Json | null
+          total_results?: number | null
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "checks_geopoint_id_fkey"
+            columns: ["geopoint_id"]
+            isOneToOne: false
+            referencedRelation: "geopoints"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "checks_keyword_id_fkey"
+            columns: ["keyword_id"]
+            isOneToOne: false
+            referencedRelation: "keywords"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "checks_org_id_fkey"
+            columns: ["org_id"]
+            isOneToOne: false
+            referencedRelation: "organizations"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      geopoints: {
+        Row: {
+          created_at: string
+          id: string
+          label: string
+          lat: number
+          lon: number
+          org_id: string
+          user_id: string
+        }
+        Insert: {
+          created_at?: string
+          id?: string
+          label: string
+          lat: number
+          lon: number
+          org_id: string
+          user_id: string
+        }
+        Update: {
+          created_at?: string
+          id?: string
+          label?: string
+          lat?: number
+          lon?: number
+          org_id?: string
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "geopoints_org_id_fkey"
+            columns: ["org_id"]
+            isOneToOne: false
+            referencedRelation: "organizations"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      keywords: {
+        Row: {
+          created_at: string
+          id: string
+          keyword: string
+          org_id: string
+          user_id: string
+        }
+        Insert: {
+          created_at?: string
+          id?: string
+          keyword: string
+          org_id: string
+          user_id: string
+        }
+        Update: {
+          created_at?: string
+          id?: string
+          keyword?: string
+          org_id?: string
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "keywords_org_id_fkey"
+            columns: ["org_id"]
+            isOneToOne: false
+            referencedRelation: "organizations"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      organizations: {
+        Row: {
+          address: string | null
+          city: string | null
+          created_at: string
+          id: string
+          lat: number | null
+          lon: number | null
+          name: string
+          user_id: string
+          yandex_id: string
+        }
+        Insert: {
+          address?: string | null
+          city?: string | null
+          created_at?: string
+          id?: string
+          lat?: number | null
+          lon?: number | null
+          name: string
+          user_id: string
+          yandex_id: string
+        }
+        Update: {
+          address?: string | null
+          city?: string | null
+          created_at?: string
+          id?: string
+          lat?: number | null
+          lon?: number | null
+          name?: string
+          user_id?: string
+          yandex_id?: string
+        }
+        Relationships: []
+      }
     }
     Views: {
       [_ in never]: never
