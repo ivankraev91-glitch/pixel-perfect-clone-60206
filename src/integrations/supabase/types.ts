@@ -178,6 +178,132 @@ export type Database = {
         }
         Relationships: []
       }
+      proxy_health: {
+        Row: {
+          fail_count: number
+          last_fail_at: string | null
+          last_success_at: string | null
+          proxy: string
+          success_count: number
+          updated_at: string
+        }
+        Insert: {
+          fail_count?: number
+          last_fail_at?: string | null
+          last_success_at?: string | null
+          proxy: string
+          success_count?: number
+          updated_at?: string
+        }
+        Update: {
+          fail_count?: number
+          last_fail_at?: string | null
+          last_success_at?: string | null
+          proxy?: string
+          success_count?: number
+          updated_at?: string
+        }
+        Relationships: []
+      }
+      scrape_jobs: {
+        Row: {
+          attempts: number
+          created_at: string
+          error: string | null
+          finished_at: string | null
+          geopoint_id: string
+          id: string
+          keyword_id: string
+          next_run_at: string
+          org_id: string
+          result_check_id: string | null
+          started_at: string | null
+          status: string
+          user_id: string
+        }
+        Insert: {
+          attempts?: number
+          created_at?: string
+          error?: string | null
+          finished_at?: string | null
+          geopoint_id: string
+          id?: string
+          keyword_id: string
+          next_run_at?: string
+          org_id: string
+          result_check_id?: string | null
+          started_at?: string | null
+          status?: string
+          user_id: string
+        }
+        Update: {
+          attempts?: number
+          created_at?: string
+          error?: string | null
+          finished_at?: string | null
+          geopoint_id?: string
+          id?: string
+          keyword_id?: string
+          next_run_at?: string
+          org_id?: string
+          result_check_id?: string | null
+          started_at?: string | null
+          status?: string
+          user_id?: string
+        }
+        Relationships: []
+      }
+      scrape_sessions: {
+        Row: {
+          banned_until: string | null
+          cookies: Json
+          created_at: string
+          id: string
+          last_used_at: string | null
+          pool: string
+          proxy: string
+        }
+        Insert: {
+          banned_until?: string | null
+          cookies?: Json
+          created_at?: string
+          id?: string
+          last_used_at?: string | null
+          pool?: string
+          proxy: string
+        }
+        Update: {
+          banned_until?: string | null
+          cookies?: Json
+          created_at?: string
+          id?: string
+          last_used_at?: string | null
+          pool?: string
+          proxy?: string
+        }
+        Relationships: []
+      }
+      system_alerts: {
+        Row: {
+          created_at: string
+          id: string
+          kind: string
+          message: string
+        }
+        Insert: {
+          created_at?: string
+          id?: string
+          kind: string
+          message: string
+        }
+        Update: {
+          created_at?: string
+          id?: string
+          kind?: string
+          message?: string
+        }
+        Relationships: []
+      }
     }
     Views: {
       [_ in never]: never
