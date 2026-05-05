@@ -27,8 +27,10 @@ export default function Onboarding() {
   const [step, setStep] = useState(1);
 
   // step 1
+  const [mode, setMode] = useState<"search" | "url">("search");
   const [query, setQuery] = useState("");
   const [city, setCity] = useState("");
+  const [orgUrl, setOrgUrl] = useState("");
   const [searching, setSearching] = useState(false);
   const [results, setResults] = useState<OrgResult[]>([]);
   const [selected, setSelected] = useState<OrgResult | null>(null);
@@ -59,18 +61,20 @@ export default function Onboarding() {
   }, [user, loading, navigate]);
 
   const search = async () => {
-    if (!query.trim()) return;
+    const body = mode === "url" ? { url: orgUrl } : { query, city };
+    if (mode === "url" ? !orgUrl.trim() : !query.trim()) return;
     setSearching(true);
-    const { data, error } = await supabase.functions.invoke("search-org", {
-      body: { query, city },
-    });
+    const { data, error } = await supabase.functions.invoke("search-org", { body });
     setSearching(false);
     if (error) {
-      toast.error("Ошибка поиска: " + error.message);
+      const msg = (data as any)?.error || error.message || "Неизвестная ошибка";
+      toast.error("Ошибка поиска: " + msg);
       return;
     }
-    setResults(data?.results ?? []);
-    if ((data?.results ?? []).length === 0) toast.info("Ничего не найдено");
+    const list = data?.results ?? [];
+    setResults(list);
+    if (list.length === 1) setSelected(list[0]);
+    if (list.length === 0) toast.info("Ничего не найдено");
   };
 
   const saveOrg = async () => {
