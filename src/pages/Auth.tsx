@@ -51,7 +51,8 @@ export default function Auth() {
     });
     if (result.error) {
       setBusy(false);
-      toast.error("Не удалось войти через Google");
+      console.error("Google OAuth error:", result.error);
+      toast.error(`Не удалось войти через Google: ${(result.error as any)?.message ?? result.error}`);
     }
   };
 
