@@ -27,8 +27,10 @@ export default function Onboarding() {
   const [step, setStep] = useState(1);
 
   // step 1
+  const [mode, setMode] = useState<"search" | "url">("search");
   const [query, setQuery] = useState("");
   const [city, setCity] = useState("");
+  const [orgUrl, setOrgUrl] = useState("");
   const [searching, setSearching] = useState(false);
   const [results, setResults] = useState<OrgResult[]>([]);
   const [selected, setSelected] = useState<OrgResult | null>(null);
@@ -59,18 +61,20 @@ export default function Onboarding() {
   }, [user, loading, navigate]);
 
   const search = async () => {
-    if (!query.trim()) return;
+    const body = mode === "url" ? { url: orgUrl } : { query, city };
+    if (mode === "url" ? !orgUrl.trim() : !query.trim()) return;
     setSearching(true);
-    const { data, error } = await supabase.functions.invoke("search-org", {
-      body: { query, city },
-    });
+    const { data, error } = await supabase.functions.invoke("search-org", { body });
     setSearching(false);
     if (error) {
-      toast.error("Ошибка поиска: " + error.message);
+      const msg = (data as any)?.error || error.message || "Неизвестная ошибка";
+      toast.error("Ошибка поиска: " + msg);
       return;
     }
-    setResults(data?.results ?? []);
-    if ((data?.results ?? []).length === 0) toast.info("Ничего не найдено");
+    const list = data?.results ?? [];
+    setResults(list);
+    if (list.length === 1) setSelected(list[0]);
+    if (list.length === 0) toast.info("Ничего не найдено");
   };
 
   const saveOrg = async () => {
@@ -161,20 +165,50 @@ export default function Onboarding() {
           <Card>
             <CardHeader>
               <CardTitle>Найдите свою организацию</CardTitle>
-              <CardDescription>Введите название и город — мы найдём карточку в Яндекс Бизнесе.</CardDescription>
+              <CardDescription>Введите название и город или вставьте прямую ссылку на карточку в Яндекс Картах.</CardDescription>
             </CardHeader>
             <CardContent className="space-y-4">
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+              <div className="flex gap-2 text-sm">
+                <button
+                  type="button"
+                  onClick={() => setMode("search")}
+                  className={`px-3 py-1.5 rounded-lg border ${mode === "search" ? "border-primary bg-primary/5 font-medium" : "border-border text-muted-foreground"}`}
+                >
+                  Поиск
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setMode("url")}
+                  className={`px-3 py-1.5 rounded-lg border ${mode === "url" ? "border-primary bg-primary/5 font-medium" : "border-border text-muted-foreground"}`}
+                >
+                  По ссылке
+                </button>
+              </div>
+
+              {mode === "search" ? (
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                  <Input
+                    className="sm:col-span-2"
+                    placeholder="Название (например, Стоматология Улыбка)"
+                    value={query}
+                    onChange={(e) => setQuery(e.target.value)}
+                    onKeyDown={(e) => e.key === "Enter" && search()}
+                  />
+                  <Input placeholder="Город" value={city} onChange={(e) => setCity(e.target.value)} />
+                </div>
+              ) : (
                 <Input
-                  className="sm:col-span-2"
-                  placeholder="Название (например, Стоматология Улыбка)"
-                  value={query}
-                  onChange={(e) => setQuery(e.target.value)}
+                  placeholder="https://yandex.ru/maps/org/.../1234567890/"
+                  value={orgUrl}
+                  onChange={(e) => setOrgUrl(e.target.value)}
                   onKeyDown={(e) => e.key === "Enter" && search()}
                 />
-                <Input placeholder="Город" value={city} onChange={(e) => setCity(e.target.value)} />
-              </div>
-              <Button onClick={search} disabled={searching || !query.trim()}>
+              )}
+
+              <Button
+                onClick={search}
+                disabled={searching || (mode === "search" ? !query.trim() : !orgUrl.trim())}
+              >
                 {searching ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <Search className="h-4 w-4 mr-2" />}
                 Найти
               </Button>
