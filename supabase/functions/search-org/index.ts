@@ -1,4 +1,9 @@
+// Search Yandex Maps for an organization. Two modes:
+// - URL: extract Yandex org ID directly from a maps URL
+// - text: search via the scraping pipeline (proxies + captcha)
+
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.74.0";
+import { makeServiceClient, searchYandexMaps } from "../_shared/yandex-scrape.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -7,44 +12,32 @@ const corsHeaders = {
 };
 
 function extractYandexId(url: string): string | null {
-  try {
-    // Match patterns like /org/<slug>/<digits>/ or /org/<digits>
-    const m = url.match(/\/org\/(?:[^/]+\/)?(\d{6,})/);
-    if (m) return m[1];
-    // Match ?oid=12345
-    const oid = url.match(/[?&]oid=(\d{6,})/);
-    if (oid) return oid[1];
-    return null;
-  } catch {
-    return null;
-  }
+  const m = url.match(/\/org\/(?:[^/]+\/)?(\d{6,})/);
+  if (m) return m[1];
+  const oid = url.match(/[?&]oid=(\d{6,})/);
+  if (oid) return oid[1];
+  return null;
 }
 
 Deno.serve(async (req) => {
-  if (req.method === "OPTIONS") {
-    return new Response(null, { headers: corsHeaders });
-  }
+  if (req.method === "OPTIONS") return new Response(null, { headers: corsHeaders });
 
   try {
     const authHeader = req.headers.get("Authorization");
     if (!authHeader?.startsWith("Bearer ")) {
       return new Response(JSON.stringify({ error: "Unauthorized" }), {
-        status: 401,
-        headers: { ...corsHeaders, "Content-Type": "application/json" },
+        status: 401, headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
     }
-
-    const supabase = createClient(
+    const userClient = createClient(
       Deno.env.get("SUPABASE_URL")!,
       Deno.env.get("SUPABASE_ANON_KEY")!,
       { global: { headers: { Authorization: authHeader } } },
     );
-    const { data: userData, error: authErr } = await supabase.auth.getUser();
-    if (authErr || !userData?.user) {
-      console.log("auth failed", authErr);
+    const { data: u, error: authErr } = await userClient.auth.getUser();
+    if (authErr || !u?.user) {
       return new Response(JSON.stringify({ error: "Unauthorized" }), {
-        status: 401,
-        headers: { ...corsHeaders, "Content-Type": "application/json" },
+        status: 401, headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
     }
 
@@ -53,91 +46,49 @@ Deno.serve(async (req) => {
     const city: string = (body.city ?? "").toString().trim();
     const url: string = (body.url ?? "").toString().trim();
 
-    const apikey = Deno.env.get("YANDEX_GEOSEARCH_API_KEY");
-    if (!apikey) {
-      return new Response(JSON.stringify({ error: "Не настроен YANDEX_GEOSEARCH_API_KEY" }), {
-        status: 500,
-        headers: { ...corsHeaders, "Content-Type": "application/json" },
-      });
-    }
-
-    // --- Mode: direct URL -> lookup by yandex id ---
+    // URL mode — try to enrich via search; if fails, return ID-only stub.
     if (url) {
       const yid = extractYandexId(url);
       if (!yid) {
         return new Response(JSON.stringify({ error: "Не удалось распознать ID в ссылке. Используйте ссылку вида yandex.ru/maps/org/.../1234567890/" }), {
-          status: 400,
-          headers: { ...corsHeaders, "Content-Type": "application/json" },
+          status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" },
         });
       }
-      // Try lookup by id using geosearch
-      const lookup = `https://search-maps.yandex.ru/v1/?text=${yid}&type=biz&results=1&lang=ru_RU&apikey=${apikey}`;
-      const r = await fetch(lookup);
-      if (r.ok) {
-        const d = await r.json();
-        const f = (d.features ?? [])[0];
-        if (f) {
-          const meta = f.properties?.CompanyMetaData ?? {};
-          const [lon, lat] = f.geometry?.coordinates ?? [null, null];
-          if (String(meta.id) === yid) {
-            return new Response(JSON.stringify({
-              results: [{
-                name: meta.name ?? "",
-                address: meta.address ?? "",
-                yandex_id: yid,
-                lat, lon,
-              }],
-            }), { headers: { ...corsHeaders, "Content-Type": "application/json" } });
-          }
+      const svc = makeServiceClient();
+      const res = await searchYandexMaps(svc, "search", yid);
+      if (res.ok) {
+        const found = res.results.find((r) => r.yandex_id === yid) ?? res.results[0];
+        if (found) {
+          return new Response(JSON.stringify({ results: [found] }), {
+            headers: { ...corsHeaders, "Content-Type": "application/json" },
+          });
         }
       }
-      // Fallback: return id only, user fills name later
       return new Response(JSON.stringify({
         results: [{ name: `Организация #${yid}`, address: "", yandex_id: yid, lat: null, lon: null }],
       }), { headers: { ...corsHeaders, "Content-Type": "application/json" } });
     }
 
-    // --- Mode: text search ---
     if (!query) {
       return new Response(JSON.stringify({ error: "Введите название или ссылку" }), {
-        status: 400,
-        headers: { ...corsHeaders, "Content-Type": "application/json" },
+        status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
     }
 
+    const svc = makeServiceClient();
     const text = city ? `${query}, ${city}` : query;
-    const yurl = `https://search-maps.yandex.ru/v1/?text=${encodeURIComponent(text)}&type=biz&results=10&lang=ru_RU&apikey=${apikey}`;
-
-    const resp = await fetch(yurl);
-    if (!resp.ok) {
-      const t = await resp.text();
-      console.log("Yandex error", resp.status, t);
-      return new Response(JSON.stringify({ error: `Яндекс вернул ${resp.status}`, details: t }), {
-        status: 502,
-        headers: { ...corsHeaders, "Content-Type": "application/json" },
+    const res = await searchYandexMaps(svc, "search", text);
+    if (!res.ok) {
+      return new Response(JSON.stringify({ error: `Поиск не удался: ${res.error}` }), {
+        status: 502, headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
     }
-    const data = await resp.json();
-    const results = (data.features ?? []).map((f: any) => {
-      const meta = f.properties?.CompanyMetaData ?? {};
-      const [lon, lat] = f.geometry?.coordinates ?? [null, null];
-      return {
-        name: meta.name ?? f.properties?.name ?? "",
-        address: meta.address ?? "",
-        yandex_id: String(meta.id ?? ""),
-        lat,
-        lon,
-      };
-    }).filter((r: any) => r.yandex_id);
-
-    return new Response(JSON.stringify({ results }), {
+    return new Response(JSON.stringify({ results: res.results.slice(0, 10) }), {
       headers: { ...corsHeaders, "Content-Type": "application/json" },
     });
   } catch (e) {
-    console.log("search-org exception", e);
     return new Response(JSON.stringify({ error: String(e) }), {
-      status: 500,
-      headers: { ...corsHeaders, "Content-Type": "application/json" },
+      status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" },
     });
   }
 });
