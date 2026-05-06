@@ -16,37 +16,58 @@ export type Database = {
     Tables: {
       checks: {
         Row: {
+          check_type: string | null
           checked_at: string
+          error_type: string | null
           geopoint_id: string
           id: string
           keyword_id: string
+          maps_indexed: boolean | null
+          maps_position: number | null
           org_id: string
           position: number | null
           raw_response: Json | null
           total_results: number | null
           user_id: string
+          wizard_exists: boolean | null
+          wizard_position: number | null
+          wizard_total: number | null
         }
         Insert: {
+          check_type?: string | null
           checked_at?: string
+          error_type?: string | null
           geopoint_id: string
           id?: string
           keyword_id: string
+          maps_indexed?: boolean | null
+          maps_position?: number | null
           org_id: string
           position?: number | null
           raw_response?: Json | null
           total_results?: number | null
           user_id: string
+          wizard_exists?: boolean | null
+          wizard_position?: number | null
+          wizard_total?: number | null
         }
         Update: {
+          check_type?: string | null
           checked_at?: string
+          error_type?: string | null
           geopoint_id?: string
           id?: string
           keyword_id?: string
+          maps_indexed?: boolean | null
+          maps_position?: number | null
           org_id?: string
           position?: number | null
           raw_response?: Json | null
           total_results?: number | null
           user_id?: string
+          wizard_exists?: boolean | null
+          wizard_position?: number | null
+          wizard_total?: number | null
         }
         Relationships: [
           {
@@ -153,6 +174,7 @@ export type Database = {
           name: string
           user_id: string
           yandex_id: string
+          yandex_region_id: number | null
         }
         Insert: {
           address?: string | null
@@ -164,6 +186,7 @@ export type Database = {
           name: string
           user_id: string
           yandex_id: string
+          yandex_region_id?: number | null
         }
         Update: {
           address?: string | null
@@ -175,6 +198,7 @@ export type Database = {
           name?: string
           user_id?: string
           yandex_id?: string
+          yandex_region_id?: number | null
         }
         Relationships: []
       }
