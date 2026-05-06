@@ -7,11 +7,19 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { toast } from "sonner";
-import { ArrowLeft, Plus, X, MapPin } from "lucide-react";
+import { ArrowLeft, Plus, X, MapPin, RefreshCw } from "lucide-react";
+import { Badge } from "@/components/ui/badge";
 import MapPicker from "@/components/MapPicker";
 
-const MAX_KW = 3;
 const MAX_GP = 3;
+
+type KeywordRow = {
+  id: string;
+  keyword: string;
+  frequency: number | null;
+  frequency_status: string | null;
+  frequency_at: string | null;
+};
 
 export default function Settings() {
   const { user } = useAuth();
