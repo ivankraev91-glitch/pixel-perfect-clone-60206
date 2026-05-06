@@ -1,7 +1,7 @@
-// Search Yandex organizations via the official Geosearch API (no proxy/captcha needed).
-// Two modes:
-// - URL: extract Yandex org ID directly from a maps URL, then enrich via Geosearch by id text.
-// - text: search via Geosearch API.
+// Resolve a Yandex organization from a Maps URL.
+// No external Yandex API is used: we extract the org ID and a human-readable
+// slug from the URL itself. Coordinates/address are filled in later by the user
+// on the map (MapPicker) during onboarding.
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.74.0";
 import { regionIdFromCoords } from "../_shared/region.ts";
 
@@ -11,8 +11,6 @@ const corsHeaders = {
     "authorization, x-client-info, apikey, content-type, x-supabase-client-platform, x-supabase-client-platform-version, x-supabase-client-runtime, x-supabase-client-runtime-version",
 };
 
-const GEOSEARCH_URL = "https://search-maps.yandex.ru/v1/";
-
 function extractYandexId(url: string): string | null {
   const m = url.match(/\/org\/(?:[^/]+\/)?(\d{6,})/);
   if (m) return m[1];
@@ -21,42 +19,18 @@ function extractYandexId(url: string): string | null {
   return null;
 }
 
-type GeoResult = {
-  name: string;
-  address: string;
-  yandex_id: string;
-  lat: number | null;
-  lon: number | null;
-};
+function extractSlugName(url: string): string | null {
+  const m = url.match(/\/org\/([^/]+)\/\d{6,}/);
+  if (!m) return null;
+  const slug = decodeURIComponent(m[1]).replace(/[-_]+/g, " ").trim();
+  if (!slug) return null;
+  return slug.charAt(0).toUpperCase() + slug.slice(1);
+}
 
-async function geosearch(text: string, opts?: { ll?: string; spn?: string; results?: number }): Promise<GeoResult[]> {
-  const apiKey = Deno.env.get("YANDEX_GEOSEARCH_API_KEY");
-  if (!apiKey) throw new Error("YANDEX_GEOSEARCH_API_KEY is not configured");
-  const params = new URLSearchParams({
-    apikey: apiKey,
-    text,
-    type: "biz",
-    lang: "ru_RU",
-    results: String(opts?.results ?? 20),
-  });
-  if (opts?.ll) params.set("ll", opts.ll);
-  if (opts?.spn) params.set("spn", opts.spn);
-  const r = await fetch(`${GEOSEARCH_URL}?${params.toString()}`);
-  if (!r.ok) throw new Error(`Geosearch HTTP ${r.status}`);
-  const j: any = await r.json();
-  const features: any[] = j?.features ?? [];
-  return features.map((f) => {
-    const props = f?.properties ?? {};
-    const meta = props?.CompanyMetaData ?? {};
-    const coords: number[] | undefined = f?.geometry?.coordinates;
-    return {
-      name: meta.name ?? props.name ?? "",
-      address: meta.address ?? props.description ?? "",
-      yandex_id: String(meta.id ?? ""),
-      lon: Array.isArray(coords) ? Number(coords[0]) : null,
-      lat: Array.isArray(coords) ? Number(coords[1]) : null,
-    } as GeoResult;
-  }).filter((r) => r.yandex_id);
+function extractLL(url: string): { lat: number; lon: number } | null {
+  const ll = url.match(/[?&]ll=([\-0-9.]+)%2C([\-0-9.]+)/) || url.match(/[?&]ll=([\-0-9.]+),([\-0-9.]+)/);
+  if (ll) return { lon: Number(ll[1]), lat: Number(ll[2]) };
+  return null;
 }
 
 Deno.serve(async (req) => {
@@ -82,45 +56,37 @@ Deno.serve(async (req) => {
     }
 
     const body = await req.json().catch(() => ({}));
-    const query: string = (body.query ?? "").toString().trim();
-    const city: string = (body.city ?? "").toString().trim();
     const url: string = (body.url ?? "").toString().trim();
 
-    // URL mode
-    if (url) {
-      const yid = extractYandexId(url);
-      if (!yid) {
-        return new Response(JSON.stringify({ error: "Не удалось распознать ID в ссылке. Используйте ссылку вида yandex.ru/maps/org/.../1234567890/" }), {
-          status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" },
-        });
-      }
-      try {
-        const list = await geosearch(yid);
-        const found = list.find((r) => r.yandex_id === yid) ?? list[0];
-        if (found) {
-          const region_id = regionIdFromCoords(found.lat, found.lon);
-          return new Response(JSON.stringify({ results: [{ ...found, region_id }] }), {
-            headers: { ...corsHeaders, "Content-Type": "application/json" },
-          });
-        }
-      } catch (_) { /* fall through */ }
-      return new Response(JSON.stringify({
-        results: [{ name: `Организация #${yid}`, address: "", yandex_id: yid, lat: null, lon: null, region_id: 213 }],
-      }), { headers: { ...corsHeaders, "Content-Type": "application/json" } });
-    }
-
-    if (!query) {
-      return new Response(JSON.stringify({ error: "Введите название или ссылку" }), {
+    if (!url) {
+      return new Response(JSON.stringify({ error: "Вставьте ссылку на карточку Яндекс Карт" }), {
         status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
     }
 
-    const text = city ? `${query}, ${city}` : query;
-    const list = await geosearch(text, { results: 10 });
-    const enriched = list.map((r) => ({ ...r, region_id: regionIdFromCoords(r.lat, r.lon) }));
-    return new Response(JSON.stringify({ results: enriched }), {
-      headers: { ...corsHeaders, "Content-Type": "application/json" },
-    });
+    const yid = extractYandexId(url);
+    if (!yid) {
+      return new Response(JSON.stringify({
+        error: "Не удалось распознать ID в ссылке. Используйте ссылку вида yandex.ru/maps/org/.../1234567890/",
+      }), {
+        status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    }
+
+    const ll = extractLL(url);
+    const name = extractSlugName(url) ?? `Организация #${yid}`;
+    const region_id = regionIdFromCoords(ll?.lat ?? null, ll?.lon ?? null);
+
+    return new Response(JSON.stringify({
+      results: [{
+        name,
+        address: "",
+        yandex_id: yid,
+        lat: ll?.lat ?? null,
+        lon: ll?.lon ?? null,
+        region_id,
+      }],
+    }), { headers: { ...corsHeaders, "Content-Type": "application/json" } });
   } catch (e) {
     return new Response(JSON.stringify({ error: String((e as Error).message ?? e) }), {
       status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" },
