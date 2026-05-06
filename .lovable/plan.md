@@ -1,115 +1,64 @@
-# Частотность ключей (Wordstat) + снятие лимита
+# Убираем Yandex Geosearch API полностью
 
-Расширяем сервис: для каждого ключа показываем месячную частотность по региону организации (Wordstat), убираем лимит на 3 ключа, обновляем частоту раз в месяц автоматически.
+Сейчас Geosearch API используется в двух местах. Убираем оба и переводим на клиентский скрейпинг через прокси+капчу — ровно так, как уже работает Wizard и Wordstat.
 
-## Решения по архитектуре
+## Что меняется
 
-- **Источник**: парсинг `wordstat.yandex.ru` через тот же VPS-воркер (RU-прокси + RuCaptcha — инфраструктура уже готова).
-- **Привязка**: один `frequency` на ключ = по `organizations.yandex_region_id` (регион карточки).
-- **Лимит ключей**: снимаем (было 3 → без ограничения). Дневной лимит **проверок позиций** (50/сутки) не трогаем — частотность считается отдельной квотой.
-- **Обновление**: автоматический пересчёт раз в месяц + кнопка «Обновить» вручную в настройках.
+### 1. Поиск организации (`search-org`)
+**Сейчас:** `supabase/functions/search-org/index.ts` дёргает `search-maps.yandex.ru/v1/` с `YANDEX_GEOSEARCH_API_KEY`.
 
----
+**Будет:** оставляем только два сценария:
+- **URL-режим** (основной): пользователь вставляет ссылку `yandex.ru/maps/org/.../1234567890/` → извлекаем `yandex_id` регексом (уже умеем). Имя/адрес/координаты получаем лёгким скрейпингом страницы организации (`yandex.ru/maps/org/<id>`) через воркер — кладём в новую очередь `org_lookup_jobs`, фронт ждёт результат поллингом.
+- Альтернатива (проще): в URL-режиме вообще не обогащаем — сохраняем `yandex_id` + имя из URL-слага, координаты/адрес пользователь добавит при создании геоточки на карте (MapPicker уже есть). Регион определяем по координатам первой геоточки.
 
-## 1. БД (миграция)
+**Текстовый поиск по названию убираем из UI** — он работал только через Geosearch. В Onboarding оставляем единственный путь: «вставьте ссылку на карточку Яндекс.Карт».
 
-```sql
-ALTER TABLE keywords
-  ADD COLUMN frequency        integer,           -- месячный показ Wordstat по региону
-  ADD COLUMN frequency_region integer,           -- region_id, по которому считали
-  ADD COLUMN frequency_at     timestamptz,       -- когда последний раз обновлено
-  ADD COLUMN frequency_status text DEFAULT 'pending'; -- pending | ok | error
+### 2. Проверка позиции в Картах (worker)
+**Сейчас:** `worker/src/geosearch.ts` через API получает позицию 1..80 в выдаче Карт.
 
-CREATE TABLE wordstat_jobs (
-  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-  user_id uuid NOT NULL,
-  keyword_id uuid NOT NULL,
-  region_id integer NOT NULL,
-  status text NOT NULL DEFAULT 'pending',  -- pending | running | done | error
-  attempts int NOT NULL DEFAULT 0,
-  error text,
-  next_run_at timestamptz NOT NULL DEFAULT now(),
-  created_at timestamptz NOT NULL DEFAULT now(),
-  finished_at timestamptz
-);
-ALTER TABLE wordstat_jobs ENABLE ROW LEVEL SECURITY;
--- политики: select own (user_id=auth.uid()), service_role full access
-CREATE INDEX idx_wordstat_jobs_pending ON wordstat_jobs(status, next_run_at);
-```
+**Будет:** новый модуль `worker/src/maps.ts` — скрейпит `yandex.ru/maps/?text=<keyword>&ll=<lon,lat>&z=14` через RU-прокси с капчей (тот же стек, что `wizard.ts`). Парсит список карточек организаций, ищет нашу по `yandex_id` в ссылках вида `/maps/org/<id>`, возвращает позицию 1..N.
+- Тот же ретрай/таймаут, что у Wizard.
+- В `index.ts` заменяем `geosearchPosition(...)` на `mapsScrapePosition(...)`, остальная логика (`Promise.allSettled`, запись в `checks`) не меняется.
 
-Снимаем константы `MAX_KW = 3` в коде (см. ниже).
+### 3. Чистка
+- Удаляем файл `worker/src/geosearch.ts`.
+- Удаляем `supabase/functions/_shared/region.ts` использование Geosearch — функция `regionIdFromCoords` остаётся (нужна для определения региона по lat/lon, она не зависит от API).
+- Убираем `YANDEX_GEOSEARCH_API_KEY` из `worker/.env.example` и из секретов edge-функций (сам секрет в Cloud можно оставить — мешать не будет, но напомню удалить).
+- Обновляем `worker/README.md`: «единый стек — прокси+капча для Wizard, Maps и Wordstat».
 
-## 2. Edge function `enqueue-wordstat`
+## Нагрузка на единственный прокси (важно понимать)
 
-Новая функция: на вход `keyword_id` (или массив) → проверяет владение → достаёт `region_id` из `organizations` → создаёт записи в `wordstat_jobs`. Дедуп по `(keyword_id, status in (pending,running))`.
+После изменений **весь трафик** идёт через 1 RU-прокси:
 
-Триггерится:
-- автоматически из `keywords` insert (через триггер БД на `pg_net` к этой функции — либо прямо из клиента после успешного insert, что проще; выбираем второй вариант),
-- вручную из Settings («Обновить частотности»),
-- по cron (см. п.5).
+| Поток | Частота | Риск бана |
+|---|---|---|
+| Maps скрейпинг | при каждой проверке: N ключей × M геоточек | высокий |
+| Wizard скрейпинг | то же самое | высокий |
+| Wordstat | редко (1×/мес на ключ) | очень высокий |
+| Лукап организации (если оставим обогащение) | разово при онбординге | низкий |
 
-## 3. Воркер на VPS — новый модуль `worker/src/wordstat.ts`
+Раньше Maps шёл через API и не нагружал прокси. Теперь **нагрузка на прокси удваивается** (Maps + Wizard на каждый job). Реалистичный потолок одного residential IP — ~30-50 проверок в сутки до временного бана. Воркер уже умеет ставить сессию в `banned_until` и ретраить, но при росте нужно будет докупить IP.
+
+## Технические детали
 
 ```text
-GET https://wordstat.yandex.ru/?region={region_id}&view=table&words={keyword}
-  через ProxyAgent (RU IP)
-  при капче → captcha.ts (RuCaptcha, переиспользуем)
-  парсим число месячных показов из таблицы (regex по блоку с количеством)
-  возвращаем { frequency, status: 'ok'|'error', error? }
+worker/src/
+  maps.ts       (новый)  — скрейп yandex.ru/maps + парсинг карточек
+  wizard.ts     — без изменений
+  wordstat.ts   — без изменений
+  geosearch.ts  — УДАЛИТЬ
+  index.ts      — заменить импорт geosearchPosition → mapsScrapePosition
+
+supabase/functions/
+  search-org/index.ts — переписать: только URL-режим, без вызовов Geosearch
 ```
 
-В `worker/src/index.ts` добавить второй цикл `tickWordstat()` параллельно `tick()`:
-- забирает `pending` из `wordstat_jobs` (LIMIT 1 за раз, 1 запрос/5 сек — Wordstat жёсткий по rate-limit),
-- пишет результат в `keywords` (`frequency`, `frequency_region`, `frequency_at`, `frequency_status`) и в `wordstat_jobs` (`done`/`error`),
-- ретраи: 3 попытки с экспоненциальной задержкой, потом `error`.
+Парсинг карточек Maps: ответ `yandex.ru/maps/?text=...` отдаёт SSR-разметку с `<a href="/maps/org/<id>?...">`. Идём по порядку появления, фильтруем дубли, индекс нашего `yandex_id` = позиция. Если страница не отдала список (только 1 карточка-фокус) — fallback на `?mode=search`.
 
-Документация в `worker/README.md` обновляется — отдельный раздел Wordstat.
+## Вопрос перед стартом
 
-## 4. UI
+Какой UX для добавления организации оставляем?
+- **A)** Только ссылка на Я.Карты + имя из URL, координаты пользователь ставит на карте сам.
+- **B)** Ссылка + воркер дополнительно скрейпит карточку организации, чтобы автоматически подтянуть имя/адрес/координаты (медленнее, +1 job в очереди, но удобнее).
 
-### `Onboarding.tsx`
-- Удалить `MAX_KEYWORDS = 3`. Поле ввода + кнопка `+`. Список ключей без верхнего ограничения.
-- Подсказка: «Частотность будет посчитана автоматически после сохранения».
-
-### `Settings.tsx`
-- Удалить `MAX_KW = 3`.
-- В каждой строке ключа показать: название, бейдж частотности (`ок: 1 240/мес`, `считаем…`, `ошибка`), маленькую иконку «обновить» рядом.
-- Кнопка «Пересчитать все частотности» сверху списка → вызывает `enqueue-wordstat` массивом.
-- Поле ввода ключа: при добавлении после успешного insert сразу вызываем `enqueue-wordstat` с `keyword_id`.
-- Realtime подписка на `keywords` (UPDATE) — частотность подкатывается без перезагрузки.
-
-### `Dashboard.tsx`
-- В селекте/списке ключей рядом с названием показать частотность (если есть): `стоматология рядом · 4 320/мес`.
-- В таблице истории добавить колонку «Частотность» (берём из `keywords.frequency` на момент рендера — текущая, не историческая).
-
-## 5. Ежемесячный пересчёт
-
-`pg_cron` job (через insert-tool, не миграцию — содержит URL/anon key) — раз в месяц 1-го числа в 03:00 МСК:
-```sql
-select cron.schedule('wordstat-monthly', '0 0 1 * *', $$
-  select net.http_post(
-    url:='https://<ref>.supabase.co/functions/v1/enqueue-wordstat',
-    headers:='{"Content-Type":"application/json","apikey":"<anon>"}'::jsonb,
-    body:='{"all": true}'::jsonb
-  );
-$$);
-```
-
-`enqueue-wordstat` при `{all:true}` (вызов с service_role внутренне) — ставит задачи на все `keywords`, у которых `frequency_at IS NULL OR frequency_at < now() - interval '25 days'`.
-
-## 6. Деплой
-
-После одобрения и реализации — на VPS:
-```bash
-cd ~/yandex-worker && git pull && npm i && npm run build && pm2 restart yandex-worker
-```
-Никаких новых секретов не нужно: `RU_PROXY_LIST`, `CAPTCHA_API_KEY`, `SUPABASE_SERVICE_ROLE_KEY` уже есть.
-
-## Что НЕ делаем
-
-- Историю изменений частотности (v2, отдельная таблица timeseries).
-- Расширение/уточнение фразы «"!ключ"», базовую/точную/уточнённую — берём только базовую цифру.
-- Wordstat для разных регионов на одной карточке (только region организации).
-- Разделение квот на пользователей — пока общая очередь FIFO.
-
-Подтверждай — приступаю.
+Если не ответишь — пойду по варианту **B** (удобнее для пользователя, нагрузка на прокси минимальная: 1 запрос на онбординг).

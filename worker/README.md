@@ -44,10 +44,6 @@ ssh root@<IP_СЕРВЕРА>
 - https://rucaptcha.com → личный кабинет → API key.
 - `CAPTCHA_PROVIDER=rucaptcha`
 
-### 2.5 `YANDEX_GEOSEARCH_API_KEY` (Яндекс Geosearch)
-- https://developer.tech.yandex.ru/ → ключ для **JavaScript API и HTTP Geocoder / Поиск по организациям**.
-- Используется для официальной проверки позиции в Яндекс Картах (без капчи и без RU IP).
-
 ---
 
 ## 3. Установка одной командой
