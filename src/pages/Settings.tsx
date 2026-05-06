@@ -198,3 +198,33 @@ export default function Settings() {
     </div>
   );
 }
+
+function formatFreq(n: number) {
+  return n.toLocaleString("ru-RU");
+}
+
+function FrequencyBadge({ k, onRefresh }: { k: KeywordRow; onRefresh: () => void }) {
+  const status = k.frequency_status ?? "pending";
+  if (status === "pending") {
+    return <Badge variant="secondary" className="whitespace-nowrap">считаем…</Badge>;
+  }
+  if (status === "error") {
+    return (
+      <button onClick={onRefresh} title="Повторить">
+        <Badge variant="destructive" className="whitespace-nowrap cursor-pointer">
+          ошибка · повторить
+        </Badge>
+      </button>
+    );
+  }
+  // ok
+  return (
+    <button onClick={onRefresh} title="Пересчитать" className="flex items-center gap-1">
+      <Badge variant="outline" className="whitespace-nowrap">
+        {k.frequency != null ? `${formatFreq(k.frequency)} /мес` : "—"}
+      </Badge>
+      <RefreshCw className="h-3 w-3 text-muted-foreground" />
+    </button>
+  );
+}
+
