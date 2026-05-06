@@ -127,6 +127,10 @@ sudo -u worker pm2 logs yandex-worker
 sudo -u worker bash -c 'cd /home/worker/app && git pull && cd worker && npm install && npx tsc -p . && pm2 restart yandex-worker'
 ```
 
+### Логи на диске
+
+`/home/worker/app/worker/logs/out.log` и `err.log`. PM2 ротирует автоматически.
+
 ### Wordstat (частотность ключей)
 
 Воркер дополнительно обрабатывает очередь `wordstat_jobs` — раз в 5 секунд берёт по одной задаче, парсит `wordstat.yandex.ru` через те же RU-прокси и капча-сервис, пишет результат в `keywords.frequency`.
