@@ -13,7 +13,7 @@ import { toast } from "sonner";
 import { MapPin, Settings, LogOut, Loader2, Search } from "lucide-react";
 
 interface Org { id: string; name: string; city: string | null; address: string | null; }
-interface Kw { id: string; keyword: string; }
+interface Kw { id: string; keyword: string; frequency: number | null; }
 interface Gp { id: string; label: string; lat: number; lon: number; }
 interface Check {
   id: string;
