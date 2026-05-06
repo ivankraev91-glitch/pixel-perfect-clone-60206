@@ -77,7 +77,7 @@ export default function Dashboard() {
     const o = orgs[0] as Org;
     setOrg(o);
     const [{ data: kws }, { data: gps }, { data: chs }] = await Promise.all([
-      supabase.from("keywords").select("id, keyword").eq("org_id", o.id),
+      supabase.from("keywords").select("id, keyword, frequency").eq("org_id", o.id),
       supabase.from("geopoints").select("id, label, lat, lon").eq("org_id", o.id),
       supabase
         .from("checks")
