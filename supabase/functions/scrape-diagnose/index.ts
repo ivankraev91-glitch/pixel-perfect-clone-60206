@@ -28,7 +28,10 @@ Deno.serve(async (req) => {
       RU_PROXY_LIST_set: !!Deno.env.get("RU_PROXY_LIST"),
       CAPTCHA_API_KEY_set: !!Deno.env.get("CAPTCHA_API_KEY"),
       CAPTCHA_PROVIDER: Deno.env.get("CAPTCHA_PROVIDER") ?? null,
-      SCRAPE_WORKER_TOKEN_set: !!Deno.env.get("SCRAPE_WORKER_TOKEN"),
+      SCRAPE_WORKER_TOKEN_set: !!envToken,
+      SCRAPE_WORKER_TOKEN_len: envToken?.length ?? 0,
+      header_token_len: hdrToken?.length ?? 0,
+      tokens_match: !!envToken && envToken === hdrToken,
     },
     deno_create_http_client: typeof (Deno as any).createHttpClient === "function",
   };
