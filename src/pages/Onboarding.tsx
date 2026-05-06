@@ -262,7 +262,7 @@ export default function Onboarding() {
                   onChange={(e) => setKwInput(e.target.value)}
                   onKeyDown={(e) => e.key === "Enter" && (e.preventDefault(), addKw())}
                 />
-                <Button onClick={addKw} disabled={keywords.length >= MAX_KEYWORDS}>
+                <Button onClick={addKw}>
                   <Plus className="h-4 w-4" />
                 </Button>
               </div>
