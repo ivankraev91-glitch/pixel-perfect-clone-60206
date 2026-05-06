@@ -252,7 +252,7 @@ export default function Onboarding() {
           <Card>
             <CardHeader>
               <CardTitle>Ключевые запросы</CardTitle>
-              <CardDescription>До {MAX_KEYWORDS} запросов, по которым проверяем позицию.</CardDescription>
+              <CardDescription>Запросы, по которым проверяем позицию. Частотность по региону посчитается автоматически.</CardDescription>
             </CardHeader>
             <CardContent className="space-y-4">
               <div className="flex gap-2">
