@@ -14,9 +14,26 @@ const UA =
 
 // ---------- Proxy pool ----------
 
+export function normalizeProxy(raw: string): string {
+  const s = raw.trim();
+  if (!s) return s;
+  if (/^https?:\/\//i.test(s) || /^socks5?:\/\//i.test(s)) return s;
+  // Format: ip:port:user:pass  ->  http://user:pass@ip:port
+  const parts = s.split(":");
+  if (parts.length === 4) {
+    const [ip, port, user, pass] = parts;
+    return `http://${encodeURIComponent(user)}:${encodeURIComponent(pass)}@${ip}:${port}`;
+  }
+  // Format: user:pass@ip:port
+  if (/@/.test(s) && !/^\w+:\/\//.test(s)) return `http://${s}`;
+  // Format: ip:port (no auth)
+  if (parts.length === 2) return `http://${s}`;
+  return s;
+}
+
 export function getProxyList(): string[] {
   const raw = Deno.env.get("RU_PROXY_LIST") ?? "";
-  return raw.split(/[\s,]+/).map((s) => s.trim()).filter(Boolean);
+  return raw.split(/[\s,;\n]+/).map((s) => s.trim()).filter(Boolean).map(normalizeProxy);
 }
 
 export async function ensureProxiesSeeded(svc: SupabaseClient, pool: "check" | "search") {
