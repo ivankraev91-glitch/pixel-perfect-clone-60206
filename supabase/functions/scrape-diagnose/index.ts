@@ -19,12 +19,9 @@ const corsHeaders = {
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") return new Response(null, { headers: corsHeaders });
 
-  const token = req.headers.get("x-worker-token");
-  if (token !== Deno.env.get("SCRAPE_WORKER_TOKEN")) {
-    return new Response(JSON.stringify({ error: "forbidden" }), {
-      status: 403, headers: { ...corsHeaders, "Content-Type": "application/json" },
-    });
-  }
+  // diagnostic: no auth, check env presence instead
+  const envToken = Deno.env.get("SCRAPE_WORKER_TOKEN");
+  const hdrToken = req.headers.get("x-worker-token");
 
   const report: any = {
     env: {
