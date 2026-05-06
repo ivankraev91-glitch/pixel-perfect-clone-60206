@@ -16,7 +16,14 @@ interface OrgResult {
   yandex_id: string;
   lat: number;
   lon: number;
+  region_id?: number;
 }
+
+const REGION_NAMES: Record<number, string> = {
+  213: "Москва", 2: "Санкт-Петербург", 54: "Екатеринбург", 65: "Новосибирск",
+  43: "Казань", 47: "Нижний Новгород", 35: "Краснодар", 39: "Ростов-на-Дону",
+  51: "Самара", 172: "Уфа",
+};
 
 const MAX_KEYWORDS = 3;
 const MAX_GEOPOINTS = 3;
