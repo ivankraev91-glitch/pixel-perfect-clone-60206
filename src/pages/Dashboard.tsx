@@ -4,23 +4,54 @@ import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/contexts/AuthContext";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
+import { Badge } from "@/components/ui/badge";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid } from "recharts";
+import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, Legend } from "recharts";
 import { toast } from "sonner";
-import { MapPin, Settings, LogOut, Loader2, Search, TrendingUp, TrendingDown, Minus } from "lucide-react";
+import { MapPin, Settings, LogOut, Loader2, Search } from "lucide-react";
 
 interface Org { id: string; name: string; city: string | null; address: string | null; }
 interface Kw { id: string; keyword: string; }
 interface Gp { id: string; label: string; lat: number; lon: number; }
 interface Check {
   id: string;
-  position: number | null;
+  position: number | null;            // legacy mirror of maps_position
   total_results: number | null;
+  maps_indexed: boolean | null;
+  maps_position: number | null;
+  wizard_exists: boolean | null;
+  wizard_position: number | null;
+  wizard_total: number | null;
+  error_type: string | null;
   checked_at: string;
   keywords: { keyword: string } | null;
   geopoints: { label: string } | null;
+}
+
+type StatusKind = "ok" | "maps_only_no_wizard_card" | "maps_only_no_wizard_block" | "not_indexed" | "error";
+
+function statusOf(c: Check | null | undefined): { kind: StatusKind; label: string; tone: "success" | "warning" | "info" | "destructive" | "muted" } {
+  if (!c) return { kind: "error", label: "—", tone: "muted" };
+  if (c.maps_indexed === null && c.wizard_exists === null) return { kind: "error", label: "Ошибка проверки", tone: "destructive" };
+  if (c.maps_indexed === false) return { kind: "not_indexed", label: "Не в индексе", tone: "destructive" };
+  if (c.maps_indexed && c.wizard_exists && c.wizard_position) return { kind: "ok", label: "В Картах + колдунщике", tone: "success" };
+  if (c.maps_indexed && c.wizard_exists && !c.wizard_position) return { kind: "maps_only_no_wizard_card", label: "В Картах, не в колдунщике", tone: "warning" };
+  if (c.maps_indexed && c.wizard_exists === false) return { kind: "maps_only_no_wizard_block", label: "В Картах (колдунщика нет)", tone: "info" };
+  return { kind: "error", label: "Частичный результат", tone: "muted" };
+}
+
+function StatusBadge({ check }: { check: Check | null | undefined }) {
+  const s = statusOf(check);
+  const cls = {
+    success: "bg-success text-success-foreground",
+    warning: "bg-warning text-warning-foreground",
+    info: "bg-primary/10 text-primary border-primary/30",
+    destructive: "bg-destructive text-destructive-foreground",
+    muted: "bg-muted text-muted-foreground",
+  }[s.tone];
+  return <Badge className={cls + " border-transparent"}>{s.label}</Badge>;
 }
 
 export default function Dashboard() {
@@ -35,8 +66,6 @@ export default function Dashboard() {
   const [selKw, setSelKw] = useState<string>("");
   const [selGp, setSelGp] = useState<string>("");
   const [running, setRunning] = useState(false);
-  const [resultOpen, setResultOpen] = useState(false);
-  const [lastResult, setLastResult] = useState<any>(null);
 
   const load = async () => {
     setLoading(true);
@@ -52,7 +81,7 @@ export default function Dashboard() {
       supabase.from("geopoints").select("id, label, lat, lon").eq("org_id", o.id),
       supabase
         .from("checks")
-        .select("id, position, total_results, checked_at, keywords(keyword), geopoints(label)")
+        .select("id, position, total_results, maps_indexed, maps_position, wizard_exists, wizard_position, wizard_total, error_type, checked_at, keywords(keyword), geopoints(label)")
         .eq("org_id", o.id)
         .order("checked_at", { ascending: false })
         .limit(20),
@@ -67,7 +96,6 @@ export default function Dashboard() {
 
   useEffect(() => { if (user) load(); /* eslint-disable-next-line */ }, [user]);
 
-  // Realtime: refresh on new checks
   useEffect(() => {
     if (!user) return;
     const ch = supabase
@@ -123,17 +151,9 @@ export default function Dashboard() {
     .slice(-10)
     .map((c) => ({
       date: new Date(c.checked_at).toLocaleDateString("ru-RU", { day: "2-digit", month: "2-digit" }),
-      position: c.position ?? null,
+      maps: c.maps_position ?? c.position ?? null,
+      wizard: c.wizard_position ?? null,
     }));
-
-  const trend = (() => {
-    if (checks.length < 2) return "neutral";
-    const a = checks[0]?.position ?? 999;
-    const b = checks[1]?.position ?? 999;
-    if (a < b) return "up";
-    if (a > b) return "down";
-    return "neutral";
-  })();
 
   return (
     <div className="min-h-screen bg-background">
@@ -163,7 +183,7 @@ export default function Dashboard() {
         <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
           <div>
             <h1 className="text-2xl font-bold tracking-tight">Дашборд</h1>
-            <p className="text-sm text-muted-foreground">Текущая позиция и история проверок</p>
+            <p className="text-sm text-muted-foreground">Карты + колдунщик в одной проверке</p>
           </div>
           <Button size="lg" onClick={() => setDialogOpen(true)} disabled={keywords.length === 0 || geopoints.length === 0}>
             <Search className="h-4 w-4 mr-2" />Проверить сейчас
@@ -172,36 +192,45 @@ export default function Dashboard() {
 
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
           <Card className="lg:col-span-1">
-            <CardHeader>
-              <CardTitle className="text-sm text-muted-foreground font-medium">Текущая позиция</CardTitle>
+            <CardHeader className="pb-2">
+              <CardTitle className="text-sm text-muted-foreground font-medium">Последняя проверка</CardTitle>
             </CardHeader>
             <CardContent>
               {latest ? (
-                <>
-                  <div className="flex items-baseline gap-3">
-                    <div className="text-6xl font-bold tracking-tight">
-                      {latest.position ?? "—"}
-                    </div>
-                    {latest.position && (
-                      <div className="text-muted-foreground text-sm">
-                        из {latest.total_results}
+                <div className="space-y-4">
+                  <StatusBadge check={latest} />
+                  <div className="grid grid-cols-2 gap-3">
+                    <div className="rounded-lg border p-3">
+                      <div className="text-xs text-muted-foreground">Карты</div>
+                      <div className="text-3xl font-bold tracking-tight mt-1">
+                        {latest.maps_position ?? latest.position ?? <span className="text-muted-foreground">—</span>}
                       </div>
-                    )}
-                    <div className="ml-auto">
-                      {trend === "up" && <TrendingUp className="h-5 w-5 text-success" />}
-                      {trend === "down" && <TrendingDown className="h-5 w-5 text-destructive" />}
-                      {trend === "neutral" && <Minus className="h-5 w-5 text-muted-foreground" />}
+                      <div className="text-xs text-muted-foreground mt-1">
+                        {latest.maps_indexed === false ? "не найдена" : latest.total_results ? `из ${latest.total_results}` : ""}
+                      </div>
+                    </div>
+                    <div className="rounded-lg border p-3">
+                      <div className="text-xs text-muted-foreground">Колдунщик</div>
+                      <div className="text-3xl font-bold tracking-tight mt-1">
+                        {latest.wizard_position ?? <span className="text-muted-foreground">—</span>}
+                      </div>
+                      <div className="text-xs text-muted-foreground mt-1">
+                        {latest.wizard_exists === false
+                          ? "блока нет"
+                          : latest.wizard_exists && !latest.wizard_position
+                            ? "не в блоке"
+                            : latest.wizard_total ? `из ${latest.wizard_total}` : ""}
+                      </div>
                     </div>
                   </div>
-                  <div className="mt-4 space-y-1 text-sm">
-                    <div><span className="text-muted-foreground">Запрос:</span> «{latest.keywords?.keyword}»</div>
-                    <div><span className="text-muted-foreground">Точка:</span> {latest.geopoints?.label}</div>
-                    <div><span className="text-muted-foreground">Когда:</span> {new Date(latest.checked_at).toLocaleString("ru-RU")}</div>
+                  <div className="text-xs space-y-0.5 text-muted-foreground">
+                    <div>«{latest.keywords?.keyword}» · {latest.geopoints?.label}</div>
+                    <div>{new Date(latest.checked_at).toLocaleString("ru-RU")}</div>
                   </div>
-                </>
+                </div>
               ) : (
                 <div className="text-muted-foreground text-sm py-8 text-center">
-                  Проверок ещё не было. Нажмите «Проверить сейчас».
+                  Проверок ещё не было.
                 </div>
               )}
             </CardContent>
@@ -213,7 +242,7 @@ export default function Dashboard() {
             </CardHeader>
             <CardContent>
               {chartData.length > 0 ? (
-                <div className="h-[200px]">
+                <div className="h-[220px]">
                   <ResponsiveContainer width="100%" height="100%">
                     <LineChart data={chartData}>
                       <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" />
@@ -222,12 +251,14 @@ export default function Dashboard() {
                       <Tooltip
                         contentStyle={{ background: "hsl(var(--card))", border: "1px solid hsl(var(--border))", borderRadius: "8px" }}
                       />
-                      <Line type="monotone" dataKey="position" stroke="hsl(var(--primary))" strokeWidth={2} dot={{ r: 4 }} />
+                      <Legend wrapperStyle={{ fontSize: 12 }} />
+                      <Line type="monotone" dataKey="maps" name="Карты" stroke="hsl(var(--primary))" strokeWidth={2} dot={{ r: 3 }} connectNulls={false} />
+                      <Line type="monotone" dataKey="wizard" name="Колдунщик" stroke="hsl(var(--warning))" strokeWidth={2} dot={{ r: 3 }} connectNulls={false} />
                     </LineChart>
                   </ResponsiveContainer>
                 </div>
               ) : (
-                <div className="h-[200px] grid place-items-center text-muted-foreground text-sm">Нет данных</div>
+                <div className="h-[220px] grid place-items-center text-muted-foreground text-sm">Нет данных</div>
               )}
             </CardContent>
           </Card>
@@ -248,18 +279,30 @@ export default function Dashboard() {
                     <TableHead>Дата</TableHead>
                     <TableHead>Запрос</TableHead>
                     <TableHead>Точка</TableHead>
-                    <TableHead className="text-right">Позиция</TableHead>
+                    <TableHead className="text-right">Карты</TableHead>
+                    <TableHead className="text-right">Колдунщик</TableHead>
+                    <TableHead>Статус</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
                   {checks.map((c) => (
                     <TableRow key={c.id}>
-                      <TableCell className="text-muted-foreground">{new Date(c.checked_at).toLocaleString("ru-RU")}</TableCell>
+                      <TableCell className="text-muted-foreground whitespace-nowrap">{new Date(c.checked_at).toLocaleString("ru-RU")}</TableCell>
                       <TableCell>{c.keywords?.keyword}</TableCell>
                       <TableCell>{c.geopoints?.label}</TableCell>
                       <TableCell className="text-right font-medium">
-                        {c.position ?? <span className="text-muted-foreground">не найдена</span>}
+                        {c.maps_position ?? c.position ?? <span className="text-muted-foreground">—</span>}
                       </TableCell>
+                      <TableCell className="text-right font-medium">
+                        {c.wizard_position
+                          ? <>#{c.wizard_position}{c.wizard_total ? <span className="text-muted-foreground">/{c.wizard_total}</span> : null}</>
+                          : c.wizard_exists === false
+                            ? <span className="text-muted-foreground text-xs">нет блока</span>
+                            : c.wizard_exists
+                              ? <span className="text-muted-foreground text-xs">не в блоке</span>
+                              : <span className="text-muted-foreground">—</span>}
+                      </TableCell>
+                      <TableCell><StatusBadge check={c} /></TableCell>
                     </TableRow>
                   ))}
                 </TableBody>
@@ -273,7 +316,7 @@ export default function Dashboard() {
         <DialogContent>
           <DialogHeader>
             <DialogTitle>Запустить проверку</DialogTitle>
-            <DialogDescription>Выберите ключевое слово и гео-точку.</DialogDescription>
+            <DialogDescription>Выберите ключевое слово и гео-точку. Проверим Карты и колдунщик.</DialogDescription>
           </DialogHeader>
           <div className="space-y-3">
             <Select value={selKw} onValueChange={setSelKw}>
@@ -292,38 +335,8 @@ export default function Dashboard() {
           <DialogFooter>
             <Button variant="ghost" onClick={() => setDialogOpen(false)}>Отмена</Button>
             <Button onClick={runCheck} disabled={running || !selKw || !selGp}>
-              {running ? <><Loader2 className="h-4 w-4 mr-2 animate-spin" />Проверка...</> : "Проверить"}
+              {running ? <><Loader2 className="h-4 w-4 mr-2 animate-spin" />Постановка...</> : "Проверить"}
             </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-
-      <Dialog open={resultOpen} onOpenChange={setResultOpen}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>Результат проверки</DialogTitle>
-          </DialogHeader>
-          {lastResult && (
-            <div className="space-y-3 py-2">
-              <div className="text-center py-4">
-                <div className="text-7xl font-bold tracking-tight">
-                  {lastResult.position ?? "—"}
-                </div>
-                <div className="text-sm text-muted-foreground mt-2">
-                  {lastResult.position
-                    ? `из ${lastResult.total_results} карточек в выдаче`
-                    : "не найдена в первых 40 результатах"}
-                </div>
-              </div>
-              <div className="text-sm space-y-1">
-                <div><span className="text-muted-foreground">Запрос:</span> «{lastResult.keyword}»</div>
-                <div><span className="text-muted-foreground">Точка:</span> {lastResult.geopoint_label}</div>
-                <div><span className="text-muted-foreground">Время:</span> {new Date(lastResult.checked_at).toLocaleString("ru-RU")}</div>
-              </div>
-            </div>
-          )}
-          <DialogFooter>
-            <Button onClick={() => setResultOpen(false)}>Закрыть</Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
