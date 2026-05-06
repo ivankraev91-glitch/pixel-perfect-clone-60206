@@ -140,9 +140,10 @@ export default function Onboarding() {
     if (keywords.length === 0) return toast.error("Добавьте хотя бы один ключ");
     if (geopoints.length === 0) return toast.error("Добавьте хотя бы одну гео-точку");
     setBusy(true);
-    const { error: kwErr } = await supabase
+    const { data: insertedKw, error: kwErr } = await supabase
       .from("keywords")
-      .insert(keywords.map((k) => ({ org_id: orgId, user_id: user.id, keyword: k })));
+      .insert(keywords.map((k) => ({ org_id: orgId, user_id: user.id, keyword: k })))
+      .select("id");
     const { error: gpErr } = await supabase
       .from("geopoints")
       .insert(geopoints.map((g) => ({ org_id: orgId, user_id: user.id, ...g })));
@@ -150,6 +151,11 @@ export default function Onboarding() {
     if (kwErr || gpErr) {
       toast.error((kwErr || gpErr)!.message);
       return;
+    }
+    if (insertedKw && insertedKw.length > 0) {
+      supabase.functions.invoke("enqueue-wordstat", {
+        body: { keyword_ids: insertedKw.map((k) => k.id) },
+      }).catch(() => {});
     }
     navigate("/", { replace: true });
   };
