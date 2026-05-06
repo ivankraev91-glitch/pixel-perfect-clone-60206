@@ -117,10 +117,7 @@ export default function Onboarding() {
   const addKw = () => {
     const v = kwInput.trim();
     if (!v) return;
-    if (keywords.length >= MAX_KEYWORDS) {
-      toast.error(`Максимум ${MAX_KEYWORDS} ключевых слов`);
-      return;
-    }
+    if (keywords.includes(v)) return;
     setKeywords([...keywords, v]);
     setKwInput("");
   };
