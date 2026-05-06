@@ -13,7 +13,7 @@ import { toast } from "sonner";
 import { MapPin, Settings, LogOut, Loader2, Search } from "lucide-react";
 
 interface Org { id: string; name: string; city: string | null; address: string | null; }
-interface Kw { id: string; keyword: string; }
+interface Kw { id: string; keyword: string; frequency: number | null; }
 interface Gp { id: string; label: string; lat: number; lon: number; }
 interface Check {
   id: string;
@@ -77,7 +77,7 @@ export default function Dashboard() {
     const o = orgs[0] as Org;
     setOrg(o);
     const [{ data: kws }, { data: gps }, { data: chs }] = await Promise.all([
-      supabase.from("keywords").select("id, keyword").eq("org_id", o.id),
+      supabase.from("keywords").select("id, keyword, frequency").eq("org_id", o.id),
       supabase.from("geopoints").select("id, label, lat, lon").eq("org_id", o.id),
       supabase
         .from("checks")
@@ -322,7 +322,11 @@ export default function Dashboard() {
             <Select value={selKw} onValueChange={setSelKw}>
               <SelectTrigger><SelectValue placeholder="Ключевое слово" /></SelectTrigger>
               <SelectContent>
-                {keywords.map((k) => <SelectItem key={k.id} value={k.id}>{k.keyword}</SelectItem>)}
+                {keywords.map((k) => (
+                  <SelectItem key={k.id} value={k.id}>
+                    {k.keyword}{k.frequency != null ? ` · ${k.frequency.toLocaleString("ru-RU")}/мес` : ""}
+                  </SelectItem>
+                ))}
               </SelectContent>
             </Select>
             <Select value={selGp} onValueChange={setSelGp}>

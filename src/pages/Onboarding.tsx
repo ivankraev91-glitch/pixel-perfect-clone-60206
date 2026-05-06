@@ -25,7 +25,6 @@ const REGION_NAMES: Record<number, string> = {
   51: "Самара", 172: "Уфа",
 };
 
-const MAX_KEYWORDS = 3;
 const MAX_GEOPOINTS = 3;
 
 export default function Onboarding() {
@@ -118,10 +117,7 @@ export default function Onboarding() {
   const addKw = () => {
     const v = kwInput.trim();
     if (!v) return;
-    if (keywords.length >= MAX_KEYWORDS) {
-      toast.error(`Максимум ${MAX_KEYWORDS} ключевых слов`);
-      return;
-    }
+    if (keywords.includes(v)) return;
     setKeywords([...keywords, v]);
     setKwInput("");
   };
@@ -144,9 +140,10 @@ export default function Onboarding() {
     if (keywords.length === 0) return toast.error("Добавьте хотя бы один ключ");
     if (geopoints.length === 0) return toast.error("Добавьте хотя бы одну гео-точку");
     setBusy(true);
-    const { error: kwErr } = await supabase
+    const { data: insertedKw, error: kwErr } = await supabase
       .from("keywords")
-      .insert(keywords.map((k) => ({ org_id: orgId, user_id: user.id, keyword: k })));
+      .insert(keywords.map((k) => ({ org_id: orgId, user_id: user.id, keyword: k })))
+      .select("id");
     const { error: gpErr } = await supabase
       .from("geopoints")
       .insert(geopoints.map((g) => ({ org_id: orgId, user_id: user.id, ...g })));
@@ -154,6 +151,11 @@ export default function Onboarding() {
     if (kwErr || gpErr) {
       toast.error((kwErr || gpErr)!.message);
       return;
+    }
+    if (insertedKw && insertedKw.length > 0) {
+      supabase.functions.invoke("enqueue-wordstat", {
+        body: { keyword_ids: insertedKw.map((k) => k.id) },
+      }).catch(() => {});
     }
     navigate("/", { replace: true });
   };
@@ -256,7 +258,7 @@ export default function Onboarding() {
           <Card>
             <CardHeader>
               <CardTitle>Ключевые запросы</CardTitle>
-              <CardDescription>До {MAX_KEYWORDS} запросов, по которым проверяем позицию.</CardDescription>
+              <CardDescription>Запросы, по которым проверяем позицию. Частотность по региону посчитается автоматически.</CardDescription>
             </CardHeader>
             <CardContent className="space-y-4">
               <div className="flex gap-2">
@@ -266,7 +268,7 @@ export default function Onboarding() {
                   onChange={(e) => setKwInput(e.target.value)}
                   onKeyDown={(e) => e.key === "Enter" && (e.preventDefault(), addKw())}
                 />
-                <Button onClick={addKw} disabled={keywords.length >= MAX_KEYWORDS}>
+                <Button onClick={addKw}>
                   <Plus className="h-4 w-4" />
                 </Button>
               </div>

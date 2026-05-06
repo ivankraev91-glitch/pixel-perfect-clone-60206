@@ -131,6 +131,13 @@ sudo -u worker bash -c 'cd /home/worker/app && git pull && cd worker && npm inst
 
 `/home/worker/app/worker/logs/out.log` и `err.log`. PM2 ротирует автоматически.
 
+### Wordstat (частотность ключей)
+
+Воркер дополнительно обрабатывает очередь `wordstat_jobs` — раз в 5 секунд берёт по одной задаче, парсит `wordstat.yandex.ru` через те же RU-прокси и капча-сервис, пишет результат в `keywords.frequency`.
+
+Без отдельной настройки — использует `RU_PROXY_LIST` и `CAPTCHA_API_KEY`. Wordstat жёстко ограничивает по rate-limit, поэтому очередь обрабатывается строго по одной задаче. Ежемесячный пересчёт (1-го числа в 00:00 UTC) запускается автоматически из Lovable Cloud через cron.
+
+
 ---
 
 ## 7. Безопасность (рекомендации)

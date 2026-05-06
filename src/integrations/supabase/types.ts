@@ -134,6 +134,10 @@ export type Database = {
       keywords: {
         Row: {
           created_at: string
+          frequency: number | null
+          frequency_at: string | null
+          frequency_region: number | null
+          frequency_status: string | null
           id: string
           keyword: string
           org_id: string
@@ -141,6 +145,10 @@ export type Database = {
         }
         Insert: {
           created_at?: string
+          frequency?: number | null
+          frequency_at?: string | null
+          frequency_region?: number | null
+          frequency_status?: string | null
           id?: string
           keyword: string
           org_id: string
@@ -148,6 +156,10 @@ export type Database = {
         }
         Update: {
           created_at?: string
+          frequency?: number | null
+          frequency_at?: string | null
+          frequency_region?: number | null
+          frequency_status?: string | null
           id?: string
           keyword?: string
           org_id?: string
@@ -325,6 +337,45 @@ export type Database = {
           id?: string
           kind?: string
           message?: string
+        }
+        Relationships: []
+      }
+      wordstat_jobs: {
+        Row: {
+          attempts: number
+          created_at: string
+          error: string | null
+          finished_at: string | null
+          id: string
+          keyword_id: string
+          next_run_at: string
+          region_id: number
+          status: string
+          user_id: string
+        }
+        Insert: {
+          attempts?: number
+          created_at?: string
+          error?: string | null
+          finished_at?: string | null
+          id?: string
+          keyword_id: string
+          next_run_at?: string
+          region_id: number
+          status?: string
+          user_id: string
+        }
+        Update: {
+          attempts?: number
+          created_at?: string
+          error?: string | null
+          finished_at?: string | null
+          id?: string
+          keyword_id?: string
+          next_run_at?: string
+          region_id?: number
+          status?: string
+          user_id?: string
         }
         Relationships: []
       }

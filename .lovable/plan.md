@@ -1,140 +1,115 @@
-# Модуль «Индексация + колдунщик»
+# Частотность ключей (Wordstat) + снятие лимита
 
-Расширяем существующий цикл проверки: вместо одного парсинга Яндекс Карт по HTML — две параллельные проверки на каждое задание:
-1. **Geosearch API** (официальный, без капчи) → `maps_indexed`, `maps_position`
-2. **Парсинг yandex.ru/search** через RU-прокси + RuCaptcha → `wizard_exists`, `wizard_position`, `wizard_total`
+Расширяем сервис: для каждого ключа показываем месячную частотность по региону организации (Wordstat), убираем лимит на 3 ключа, обновляем частоту раз в месяц автоматически.
 
-Воркер живёт на VPS (план B уже реализован) — туда и добавляем логику. UI расширяем тремя цветными статусами и второй линией на графике.
+## Решения по архитектуре
+
+- **Источник**: парсинг `wordstat.yandex.ru` через тот же VPS-воркер (RU-прокси + RuCaptcha — инфраструктура уже готова).
+- **Привязка**: один `frequency` на ключ = по `organizations.yandex_region_id` (регион карточки).
+- **Лимит ключей**: снимаем (было 3 → без ограничения). Дневной лимит **проверок позиций** (50/сутки) не трогаем — частотность считается отдельной квотой.
+- **Обновление**: автоматический пересчёт раз в месяц + кнопка «Обновить» вручную в настройках.
 
 ---
 
-## Архитектура
+## 1. БД (миграция)
+
+```sql
+ALTER TABLE keywords
+  ADD COLUMN frequency        integer,           -- месячный показ Wordstat по региону
+  ADD COLUMN frequency_region integer,           -- region_id, по которому считали
+  ADD COLUMN frequency_at     timestamptz,       -- когда последний раз обновлено
+  ADD COLUMN frequency_status text DEFAULT 'pending'; -- pending | ok | error
+
+CREATE TABLE wordstat_jobs (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id uuid NOT NULL,
+  keyword_id uuid NOT NULL,
+  region_id integer NOT NULL,
+  status text NOT NULL DEFAULT 'pending',  -- pending | running | done | error
+  attempts int NOT NULL DEFAULT 0,
+  error text,
+  next_run_at timestamptz NOT NULL DEFAULT now(),
+  created_at timestamptz NOT NULL DEFAULT now(),
+  finished_at timestamptz
+);
+ALTER TABLE wordstat_jobs ENABLE ROW LEVEL SECURITY;
+-- политики: select own (user_id=auth.uid()), service_role full access
+CREATE INDEX idx_wordstat_jobs_pending ON wordstat_jobs(status, next_run_at);
+```
+
+Снимаем константы `MAX_KW = 3` в коде (см. ниже).
+
+## 2. Edge function `enqueue-wordstat`
+
+Новая функция: на вход `keyword_id` (или массив) → проверяет владение → достаёт `region_id` из `organizations` → создаёт записи в `wordstat_jobs`. Дедуп по `(keyword_id, status in (pending,running))`.
+
+Триггерится:
+- автоматически из `keywords` insert (через триггер БД на `pg_net` к этой функции — либо прямо из клиента после успешного insert, что проще; выбираем второй вариант),
+- вручную из Settings («Обновить частотности»),
+- по cron (см. п.5).
+
+## 3. Воркер на VPS — новый модуль `worker/src/wordstat.ts`
 
 ```text
-enqueue-check (edge)         worker on VPS
-   ставит job        ──►     берёт job
-                              ├─ Geosearch API (RU IP не нужен, ключ есть)
-                              └─ HTML-парсинг yandex.ru/search через ProxyLine
-                                  └─ при капче → RuCaptcha
-                              merge → INSERT в checks (новые поля)
-                                       └─ Realtime → UI
+GET https://wordstat.yandex.ru/?region={region_id}&view=table&words={keyword}
+  через ProxyAgent (RU IP)
+  при капче → captcha.ts (RuCaptcha, переиспользуем)
+  парсим число месячных показов из таблицы (regex по блоку с количеством)
+  возвращаем { frequency, status: 'ok'|'error', error? }
 ```
 
-Geosearch ключ уже лежит в `YANDEX_GEOSEARCH_API_KEY` (Lovable secrets). На VPS его тоже положим в `.env`.
+В `worker/src/index.ts` добавить второй цикл `tickWordstat()` параллельно `tick()`:
+- забирает `pending` из `wordstat_jobs` (LIMIT 1 за раз, 1 запрос/5 сек — Wordstat жёсткий по rate-limit),
+- пишет результат в `keywords` (`frequency`, `frequency_region`, `frequency_at`, `frequency_status`) и в `wordstat_jobs` (`done`/`error`),
+- ретраи: 3 попытки с экспоненциальной задержкой, потом `error`.
 
----
+Документация в `worker/README.md` обновляется — отдельный раздел Wordstat.
 
-## Изменения
+## 4. UI
 
-### 1. БД (миграция)
+### `Onboarding.tsx`
+- Удалить `MAX_KEYWORDS = 3`. Поле ввода + кнопка `+`. Список ключей без верхнего ограничения.
+- Подсказка: «Частотность будет посчитана автоматически после сохранения».
 
-Расширяем `checks` (без потери совместимости — все новые поля nullable, старое поле `position` мапим в `maps_position` через дублирование при записи):
+### `Settings.tsx`
+- Удалить `MAX_KW = 3`.
+- В каждой строке ключа показать: название, бейдж частотности (`ок: 1 240/мес`, `считаем…`, `ошибка`), маленькую иконку «обновить» рядом.
+- Кнопка «Пересчитать все частотности» сверху списка → вызывает `enqueue-wordstat` массивом.
+- Поле ввода ключа: при добавлении после успешного insert сразу вызываем `enqueue-wordstat` с `keyword_id`.
+- Realtime подписка на `keywords` (UPDATE) — частотность подкатывается без перезагрузки.
 
+### `Dashboard.tsx`
+- В селекте/списке ключей рядом с названием показать частотность (если есть): `стоматология рядом · 4 320/мес`.
+- В таблице истории добавить колонку «Частотность» (берём из `keywords.frequency` на момент рендера — текущая, не историческая).
+
+## 5. Ежемесячный пересчёт
+
+`pg_cron` job (через insert-tool, не миграцию — содержит URL/anon key) — раз в месяц 1-го числа в 03:00 МСК:
 ```sql
-ALTER TABLE checks
-  ADD COLUMN maps_indexed   boolean,
-  ADD COLUMN maps_position  integer,
-  ADD COLUMN wizard_exists  boolean,
-  ADD COLUMN wizard_position integer,
-  ADD COLUMN wizard_total   integer,
-  ADD COLUMN check_type     text DEFAULT 'full',  -- 'maps_only' | 'full'
-  ADD COLUMN error_type     text;
+select cron.schedule('wordstat-monthly', '0 0 1 * *', $$
+  select net.http_post(
+    url:='https://<ref>.supabase.co/functions/v1/enqueue-wordstat',
+    headers:='{"Content-Type":"application/json","apikey":"<anon>"}'::jsonb,
+    body:='{"all": true}'::jsonb
+  );
+$$);
 ```
 
-Расширяем `organizations`:
-```sql
-ALTER TABLE organizations ADD COLUMN yandex_region_id integer;
+`enqueue-wordstat` при `{all:true}` (вызов с service_role внутренне) — ставит задачи на все `keywords`, у которых `frequency_at IS NULL OR frequency_at < now() - interval '25 days'`.
+
+## 6. Деплой
+
+После одобрения и реализации — на VPS:
+```bash
+cd ~/yandex-worker && git pull && npm i && npm run build && pm2 restart yandex-worker
 ```
+Никаких новых секретов не нужно: `RU_PROXY_LIST`, `CAPTCHA_API_KEY`, `SUPABASE_SERVICE_ROLE_KEY` уже есть.
 
-`region_id` определяется при добавлении организации через `search-org` (по координатам) — ставим Москва=213 по умолчанию, при сохранении вычисляем правильный.
+## Что НЕ делаем
 
-### 2. `worker/` — новые модули
+- Историю изменений частотности (v2, отдельная таблица timeseries).
+- Расширение/уточнение фразы «"!ключ"», базовую/точную/уточнённую — берём только базовую цифру.
+- Wordstat для разных регионов на одной карточке (только region организации).
+- Разделение квот на пользователей — пока общая очередь FIFO.
 
-- `worker/src/geosearch.ts` — клиент Geosearch API:
-  - запрос `?text=...&ll=lon,lat&spn=0.05,0.05&type=biz&results=40`
-  - если не найдено в первых 40 → второй запрос `&skip=40&results=400` (до 80 позиций)
-  - возвращает `{ indexed: bool, position: number|null, total: number }`
-
-- `worker/src/wizard.ts` — парсер колдунщика:
-  - GET `https://yandex.ru/search/?text=...&lr={region_id}` через `undici.ProxyAgent`
-  - User-Agent Chrome desktop
-  - капча → переиспользуем `captcha.ts` (`solveYandexCaptcha`, до 3 попыток)
-  - детект блока: regex по `data-fast-name="companies"`, `data-wizard-name=*maps*`, `companies-slider`
-  - парсинг карточек внутри блока: regex/cheerio-lite для извлечения `name` + `org_id` (из ссылки `yandex.ru/maps/org/<id>`)
-  - сравнение по `yandex_id` (приоритет) и нормализованному имени (fallback)
-  - возвращает `{ exists: bool, position: number|null, total: number, error?: string }`
-
-- `worker/src/index.ts` — рефакторинг `tick()`:
-  - вместо одного `searchYandexMaps` запускаем `Promise.allSettled([geosearch(...), wizard(...)])`
-  - таймаут 15 сек на каждую
-  - запись в `checks` со всеми новыми полями + сохраняем `position = maps_position` для обратной совместимости графиков
-
-- `worker/.env.example` — добавить `YANDEX_GEOSEARCH_API_KEY=...`
-
-- `worker/README.md` — обновить список переменных и описание
-
-Удаляем legacy `worker/src/yandex.ts` (HTML-парсинг карт) — больше не нужен, заменён Geosearch API. `proxy.ts` и `captcha.ts` остаются.
-
-### 3. Edge function `search-org`
-
-При нахождении организации дополнительно вызываем геокодер для определения `region_id` по координатам и возвращаем его на фронт. Сохраняется в `organizations.yandex_region_id`.
-
-(Если геокодер не отдаёт regionId напрямую — fallback по таблице крупных городов: Москва 213, СПб 2, Екатеринбург 54, Новосибирск 65, Казань 43, по умолчанию 213.)
-
-### 4. UI (`src/pages/Dashboard.tsx`)
-
-**Карточка «Текущая позиция»** — переделываем в карточку с двумя метриками + цветной статус:
-
-| Состояние | Цвет |
-|---|---|
-| Карты + колдунщик найдены | зелёный (success) |
-| Карты есть, в колдунщике нет (но блок есть) | жёлтый (warning) |
-| Карты есть, колдунщика нет | синий (info) |
-| Не в индексе Карт | красный (destructive) |
-
-Внутри: «Карты: #N / 80» и «Колдунщик: #M из K» либо «нет блока» / «не в колдунщике».
-
-**График** — две линии (recharts):
-- синяя `maps_position` (reversed Y)
-- оранжевая `wizard_position` (на той же оси, null = разрыв)
-- серый пунктир-фон в днях, где `wizard_exists=false` (через `ReferenceArea` или просто отдельный dataset)
-
-**Таблица истории** — добавить колонки «Карты», «Колдунщик», «Статус» (бейдж с цветом).
-
-Тип `Check` расширить: `maps_position`, `maps_indexed`, `wizard_exists`, `wizard_position`, `wizard_total`.
-
-### 5. Settings / Onboarding
-
-В `Onboarding` после выбора организации — показать определённый регион (info-строка), чтобы пользователь видел: «Регион Яндекса: Москва (213)». Без отдельного UI редактирования (v2).
-
----
-
-## Что НЕ делаем сейчас
-
-- Cron-расписание (v2)
-- Сравнение с конкурентами в колдунщике (v2)
-- Мобильная выдача (v2)
-- Ручное переопределение region_id в UI (v2)
-
----
-
-## Технические детали
-
-- **Geosearch API**: ключ есть, лимит ~25 000 запросов/сутки на дев-ключ, нашему сценарию хватает с запасом. Российский IP для него не требуется.
-- **Парсер колдунщика**: HTML Яндекса нестабилен — закладываем 3 разных селектора-паттерна и graceful fallback. При не-парсинге пишем `error_type='wizard_parse'` и `wizard_exists=null` (не false), чтобы не врать пользователю.
-- **Капча**: уже работает в `worker/src/captcha.ts` через RuCaptcha. Используем тот же solver для wizard-запросов.
-- **Обратная совместимость**: старое поле `checks.position` продолжаем заполнять = `maps_position`, чтобы не ломать существующие графики на проде до раскатки нового UI.
-- **Лимит 50 проверок/сутки** в `enqueue-check` — без изменений (одна проверка = одна job = и Карты, и колдунщик параллельно).
-- **Таймауты**: каждый из двух запросов — 15 сек, общий job — до 35 сек.
-
----
-
-## Порядок реализации после одобрения
-
-1. Миграция БД (новые поля в `checks`, `organizations.yandex_region_id`).
-2. Обновить `search-org` — определять region_id, сохранять в БД.
-3. В `worker/`: новые `geosearch.ts`, `wizard.ts`, рефактор `index.ts`, обновить `.env.example` и README. Удалить `yandex.ts`.
-4. UI: расширить типы, переделать карточку статуса, график и таблицу.
-5. Чек-лист для тебя на VPS: `git pull && npm i && pm2 restart yandex-worker` + добавить `YANDEX_GEOSEARCH_API_KEY` в `.env`.
-
-Подтверждай — начинаю.
+Подтверждай — приступаю.

@@ -2,6 +2,7 @@ import "dotenv/config";
 import { db } from "./db.js";
 import { geosearchPosition } from "./geosearch.js";
 import { wizardCheck } from "./wizard.js";
+import { wordstatLookup } from "./wordstat.js";
 
 const POLL_MS = Number(process.env.WORKER_POLL_INTERVAL_MS ?? 5000);
 const BATCH_SIZE = Number(process.env.WORKER_BATCH_SIZE ?? 5);
@@ -152,13 +153,74 @@ async function failJob(id: string, error: string) {
   }).eq("id", id);
 }
 
+// ---------- Wordstat queue ----------
+const WS_MAX_ATTEMPTS = 3;
+const WS_BACKOFF_MIN = [1, 5, 15];
+
+async function tickWordstat(): Promise<number> {
+  const nowIso = new Date().toISOString();
+  const { data: jobs, error } = await db
+    .from("wordstat_jobs")
+    .select("id, user_id, keyword_id, region_id, attempts")
+    .eq("status", "pending")
+    .lte("next_run_at", nowIso)
+    .order("created_at", { ascending: true })
+    .limit(1); // strict: 1 at a time, Wordstat is rate-limited
+
+  if (error) { log("[ws] error", error.message); return 0; }
+  if (!jobs || jobs.length === 0) return 0;
+
+  const job = jobs[0];
+  await db.from("wordstat_jobs").update({ status: "running" }).eq("id", job.id);
+
+  const { data: kw } = await db.from("keywords").select("keyword").eq("id", job.keyword_id).maybeSingle();
+  if (!kw) {
+    await db.from("wordstat_jobs").update({ status: "error", error: "keyword_gone", finished_at: new Date().toISOString() }).eq("id", job.id);
+    return 1;
+  }
+
+  const res = await wordstatLookup(kw.keyword, job.region_id);
+  if (res.ok) {
+    await db.from("keywords").update({
+      frequency: res.frequency,
+      frequency_region: job.region_id,
+      frequency_at: new Date().toISOString(),
+      frequency_status: "ok",
+    }).eq("id", job.keyword_id);
+    await db.from("wordstat_jobs").update({
+      status: "done",
+      finished_at: new Date().toISOString(),
+      error: null,
+    }).eq("id", job.id);
+    log(`[ws] ok kw=${job.keyword_id} freq=${res.frequency}`);
+  } else {
+    const attempts = (job.attempts ?? 0) + 1;
+    if (attempts >= WS_MAX_ATTEMPTS) {
+      await db.from("keywords").update({ frequency_status: "error" }).eq("id", job.keyword_id);
+      await db.from("wordstat_jobs").update({
+        status: "error", attempts, error: res.error, finished_at: new Date().toISOString(),
+      }).eq("id", job.id);
+    } else {
+      const delay = WS_BACKOFF_MIN[Math.min(attempts - 1, WS_BACKOFF_MIN.length - 1)];
+      await db.from("wordstat_jobs").update({
+        status: "pending", attempts, error: res.error,
+        next_run_at: new Date(Date.now() + delay * 60_000).toISOString(),
+      }).eq("id", job.id);
+    }
+    log(`[ws] fail kw=${job.keyword_id} attempt=${attempts} err=${res.error}`);
+  }
+  return 1;
+}
+
 async function main() {
   log("[worker] started, poll interval", POLL_MS, "ms, batch", BATCH_SIZE);
   while (running) {
     try { await tick(); } catch (e: any) { log("[tick] crash", e?.message ?? e); }
+    try { await tickWordstat(); } catch (e: any) { log("[ws-tick] crash", e?.message ?? e); }
     await new Promise((r) => setTimeout(r, POLL_MS));
   }
   log("[worker] stopped");
 }
 
 main();
+
