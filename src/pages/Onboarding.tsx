@@ -97,6 +97,7 @@ export default function Onboarding() {
         address: selected.address,
         lat: selected.lat,
         lon: selected.lon,
+        yandex_region_id: selected.region_id ?? 213,
       })
       .select("id, lat, lon")
       .single();
