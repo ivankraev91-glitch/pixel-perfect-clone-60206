@@ -26,12 +26,13 @@ export default function Settings() {
   const navigate = useNavigate();
   const [orgId, setOrgId] = useState<string | null>(null);
   const [orgName, setOrgName] = useState("");
-  const [keywords, setKeywords] = useState<{ id: string; keyword: string }[]>([]);
+  const [keywords, setKeywords] = useState<KeywordRow[]>([]);
   const [geopoints, setGeopoints] = useState<{ id: string; label: string; lat: number; lon: number }[]>([]);
   const [kwInput, setKwInput] = useState("");
   const [gpLabel, setGpLabel] = useState("");
   const [gpLat, setGpLat] = useState(55.7558);
   const [gpLon, setGpLon] = useState(37.6176);
+  const [refreshingAll, setRefreshingAll] = useState(false);
 
   const load = async () => {
     const { data: orgs } = await supabase.from("organizations").select("*").limit(1);
@@ -41,24 +42,54 @@ export default function Settings() {
     setOrgName(o.name);
     if (o.lat && o.lon) { setGpLat(o.lat); setGpLon(o.lon); }
     const [{ data: kws }, { data: gps }] = await Promise.all([
-      supabase.from("keywords").select("id, keyword").eq("org_id", o.id),
+      supabase.from("keywords")
+        .select("id, keyword, frequency, frequency_status, frequency_at")
+        .eq("org_id", o.id),
       supabase.from("geopoints").select("id, label, lat, lon").eq("org_id", o.id),
     ]);
-    setKeywords(kws ?? []);
+    setKeywords((kws as KeywordRow[]) ?? []);
     setGeopoints(gps ?? []);
   };
   useEffect(() => { if (user) load(); /* eslint-disable-next-line */ }, [user]);
 
+  // Realtime: pick up frequency updates from worker
+  useEffect(() => {
+    if (!orgId) return;
+    const ch = supabase
+      .channel(`kw-${orgId}`)
+      .on("postgres_changes", { event: "UPDATE", schema: "public", table: "keywords", filter: `org_id=eq.${orgId}` },
+        (payload) => {
+          const u = payload.new as KeywordRow;
+          setKeywords((prev) => prev.map((k) => (k.id === u.id ? { ...k, ...u } : k)));
+        })
+      .subscribe();
+    return () => { supabase.removeChannel(ch); };
+  }, [orgId]);
+
+  const enqueueFreq = async (ids: string[]) => {
+    if (ids.length === 0) return;
+    await supabase.functions.invoke("enqueue-wordstat", { body: { keyword_ids: ids } });
+  };
+
+  const refreshAll = async () => {
+    if (keywords.length === 0) return;
+    setRefreshingAll(true);
+    setKeywords((prev) => prev.map((k) => ({ ...k, frequency_status: "pending" })));
+    await enqueueFreq(keywords.map((k) => k.id));
+    setRefreshingAll(false);
+    toast.success("Поставлено в очередь");
+  };
+
   const addKw = async () => {
     if (!orgId || !user || !kwInput.trim()) return;
-    if (keywords.length >= MAX_KW) return toast.error(`Максимум ${MAX_KW}`);
     const { data, error } = await supabase
       .from("keywords")
       .insert({ org_id: orgId, user_id: user.id, keyword: kwInput.trim() })
-      .select("id, keyword").single();
+      .select("id, keyword, frequency, frequency_status, frequency_at").single();
     if (error) return toast.error(error.message);
-    setKeywords([...keywords, data]);
+    setKeywords([...keywords, data as KeywordRow]);
     setKwInput("");
+    enqueueFreq([data.id]);
   };
   const delKw = async (id: string) => {
     const { error } = await supabase.from("keywords").delete().eq("id", id);
