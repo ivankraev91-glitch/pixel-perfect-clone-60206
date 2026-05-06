@@ -1,151 +1,140 @@
+# Модуль «Индексация + колдунщик»
 
-# План B: Воркер на RU-VPS
+Расширяем существующий цикл проверки: вместо одного парсинга Яндекс Карт по HTML — две параллельные проверки на каждое задание:
+1. **Geosearch API** (официальный, без капчи) → `maps_indexed`, `maps_position`
+2. **Парсинг yandex.ru/search** через RU-прокси + RuCaptcha → `wizard_exists`, `wizard_position`, `wizard_total`
 
-Lovable Cloud остаётся фронтом, БД, авторизацией. Парсинг уезжает на твой VPS в РФ — он ходит в Яндекс Карты с российского IP, через ProxyLine, решает капчу через RuCaptcha, пишет результат обратно в БД через service-role ключ.
+Воркер живёт на VPS (план B уже реализован) — туда и добавляем логику. UI расширяем тремя цветными статусами и второй линией на графике.
 
 ---
 
-## Архитектура после переноса
+## Архитектура
 
 ```text
-Браузер (Lovable UI)
-        │
-        ▼
-Lovable Cloud (Supabase)
-  • auth, RLS
-  • таблицы: organizations, keywords, geopoints, checks
-  • очередь: scrape_jobs (pending → done/failed)
-  • enqueue-check edge function (ставит задачу)
-        ▲                              │
-        │ select/update via            │ select pending jobs
-        │ service-role                 │ через REST/PostgREST
-        │                              ▼
-        └─────────────────────  RU-VPS (твой)
-                                • Node.js worker (PM2)
-                                • polling каждые 5 сек
-                                • ProxyLine IP-pool
-                                • RuCaptcha solver
-                                • кеш сессий/cookies
+enqueue-check (edge)         worker on VPS
+   ставит job        ──►     берёт job
+                              ├─ Geosearch API (RU IP не нужен, ключ есть)
+                              └─ HTML-парсинг yandex.ru/search через ProxyLine
+                                  └─ при капче → RuCaptcha
+                              merge → INSERT в checks (новые поля)
+                                       └─ Realtime → UI
 ```
 
-Что удаляем из Lovable: edge-функции `scrape-worker`, `scrape-diagnose`, pg_cron-триггер воркера, shared `yandex-scrape.ts`. Остаётся только `enqueue-check` и `search-org` (его тоже перевешу на VPS, чтобы был один источник правды).
+Geosearch ключ уже лежит в `YANDEX_GEOSEARCH_API_KEY` (Lovable secrets). На VPS его тоже положим в `.env`.
 
 ---
 
-## Что нужно от тебя (по порядку)
+## Изменения
 
-### Шаг 1. Купить VPS в РФ
-**Где:** любой из:
-- **Timeweb Cloud** (timeweb.cloud) — самый простой, оплата картой РФ, ~250₽/мес за 1 vCPU / 1 GB / Ubuntu 22.04. Datacenter СПб/Мск.
-- **Selectel** (selectel.ru) — чуть дороже, но надёжнее.
-- **Beget** (beget.com) — тоже норм.
+### 1. БД (миграция)
 
-**Конфиг для старта:** 1 vCPU, 1–2 GB RAM, 20 GB SSD, Ubuntu 22.04 LTS, локация РФ (Москва или Питер). Этого хватит на сотни проверок в день.
+Расширяем `checks` (без потери совместимости — все новые поля nullable, старое поле `position` мапим в `maps_position` через дублирование при записи):
 
-**Что получить после покупки:**
-- IP-адрес сервера
-- root-пароль или SSH-ключ
-- Доступ по SSH (`ssh root@IP`)
+```sql
+ALTER TABLE checks
+  ADD COLUMN maps_indexed   boolean,
+  ADD COLUMN maps_position  integer,
+  ADD COLUMN wizard_exists  boolean,
+  ADD COLUMN wizard_position integer,
+  ADD COLUMN wizard_total   integer,
+  ADD COLUMN check_type     text DEFAULT 'full',  -- 'maps_only' | 'full'
+  ADD COLUMN error_type     text;
+```
 
-### Шаг 2. Передать мне доступы (в секреты Lovable, я их использую только для генерации инструкций — на сервер ходить буду не я, а ты по моему гайду)
-Ничего передавать не надо. Я подготовлю **bash-скрипт установки**, ты сам его запустишь на VPS — копипастой одной команды.
+Расширяем `organizations`:
+```sql
+ALTER TABLE organizations ADD COLUMN yandex_region_id integer;
+```
 
-### Шаг 3. На VPS будут жить эти секреты (положишь в `.env` на сервере, я дам шаблон):
-- `SUPABASE_URL` (уже знаешь)
-- `SUPABASE_SERVICE_ROLE_KEY` (возьмёшь из Lovable Cloud → Connectors → Lovable Cloud → Service role key)
-- `RU_PROXY_LIST` (твой ProxyLine, тот же что сейчас)
-- `CAPTCHA_API_KEY` + `CAPTCHA_PROVIDER=rucaptcha`
-- `WORKER_POLL_INTERVAL_MS=5000`
+`region_id` определяется при добавлении организации через `search-org` (по координатам) — ставим Москва=213 по умолчанию, при сохранении вычисляем правильный.
+
+### 2. `worker/` — новые модули
+
+- `worker/src/geosearch.ts` — клиент Geosearch API:
+  - запрос `?text=...&ll=lon,lat&spn=0.05,0.05&type=biz&results=40`
+  - если не найдено в первых 40 → второй запрос `&skip=40&results=400` (до 80 позиций)
+  - возвращает `{ indexed: bool, position: number|null, total: number }`
+
+- `worker/src/wizard.ts` — парсер колдунщика:
+  - GET `https://yandex.ru/search/?text=...&lr={region_id}` через `undici.ProxyAgent`
+  - User-Agent Chrome desktop
+  - капча → переиспользуем `captcha.ts` (`solveYandexCaptcha`, до 3 попыток)
+  - детект блока: regex по `data-fast-name="companies"`, `data-wizard-name=*maps*`, `companies-slider`
+  - парсинг карточек внутри блока: regex/cheerio-lite для извлечения `name` + `org_id` (из ссылки `yandex.ru/maps/org/<id>`)
+  - сравнение по `yandex_id` (приоритет) и нормализованному имени (fallback)
+  - возвращает `{ exists: bool, position: number|null, total: number, error?: string }`
+
+- `worker/src/index.ts` — рефакторинг `tick()`:
+  - вместо одного `searchYandexMaps` запускаем `Promise.allSettled([geosearch(...), wizard(...)])`
+  - таймаут 15 сек на каждую
+  - запись в `checks` со всеми новыми полями + сохраняем `position = maps_position` для обратной совместимости графиков
+
+- `worker/.env.example` — добавить `YANDEX_GEOSEARCH_API_KEY=...`
+
+- `worker/README.md` — обновить список переменных и описание
+
+Удаляем legacy `worker/src/yandex.ts` (HTML-парсинг карт) — больше не нужен, заменён Geosearch API. `proxy.ts` и `captcha.ts` остаются.
+
+### 3. Edge function `search-org`
+
+При нахождении организации дополнительно вызываем геокодер для определения `region_id` по координатам и возвращаем его на фронт. Сохраняется в `organizations.yandex_region_id`.
+
+(Если геокодер не отдаёт regionId напрямую — fallback по таблице крупных городов: Москва 213, СПб 2, Екатеринбург 54, Новосибирск 65, Казань 43, по умолчанию 213.)
+
+### 4. UI (`src/pages/Dashboard.tsx`)
+
+**Карточка «Текущая позиция»** — переделываем в карточку с двумя метриками + цветной статус:
+
+| Состояние | Цвет |
+|---|---|
+| Карты + колдунщик найдены | зелёный (success) |
+| Карты есть, в колдунщике нет (но блок есть) | жёлтый (warning) |
+| Карты есть, колдунщика нет | синий (info) |
+| Не в индексе Карт | красный (destructive) |
+
+Внутри: «Карты: #N / 80» и «Колдунщик: #M из K» либо «нет блока» / «не в колдунщике».
+
+**График** — две линии (recharts):
+- синяя `maps_position` (reversed Y)
+- оранжевая `wizard_position` (на той же оси, null = разрыв)
+- серый пунктир-фон в днях, где `wizard_exists=false` (через `ReferenceArea` или просто отдельный dataset)
+
+**Таблица истории** — добавить колонки «Карты», «Колдунщик», «Статус» (бейдж с цветом).
+
+Тип `Check` расширить: `maps_position`, `maps_indexed`, `wizard_exists`, `wizard_position`, `wizard_total`.
+
+### 5. Settings / Onboarding
+
+В `Onboarding` после выбора организации — показать определённый регион (info-строка), чтобы пользователь видел: «Регион Яндекса: Москва (213)». Без отдельного UI редактирования (v2).
 
 ---
 
-## Что я сделаю в коде (после твоего «ок»)
+## Что НЕ делаем сейчас
 
-### Часть 1. Подготовка БД (миграция)
-- Добавить policy на `scrape_jobs` для service-role: UPDATE (чтобы воркер мог менять статус). RLS уже есть на SELECT/INSERT.
-- Удалить cron-job `scrape-worker` (если был создан) — больше не нужен.
-- (опционально) добавить индекс `(status, next_run_at)` для быстрого пика очереди.
-
-### Часть 2. Создать папку `worker/` в репозитории
-Структура:
-```
-worker/
-  package.json
-  tsconfig.json
-  .env.example
-  src/
-    index.ts          # main loop: poll → process → sleep
-    db.ts             # supabase client (service role)
-    yandex.ts         # парсер карт (перенос из _shared/yandex-scrape.ts)
-    proxy.ts          # ротация ProxyLine + proxy_health
-    captcha.ts        # RuCaptcha SmartCaptcha solver
-    sessions.ts       # cookie sessions per proxy
-  ecosystem.config.cjs # PM2
-  install.sh          # one-shot bootstrap для Ubuntu 22.04
-  README.md           # пошаговая инструкция деплоя
-```
-
-Воркер на Node.js 20 + native fetch + `https-proxy-agent` (в Node прокси работает нормально, в отличие от Deno в Supabase). Использует `@supabase/supabase-js` для общения с БД через service-role.
-
-Логика та же, что сейчас в edge-функции, только:
-- HTTP через `undici.ProxyAgent` (реально ходит через прокси, RU IP подтверждён)
-- polling вместо cron
-- PM2 для автоперезапуска и логов
-
-### Часть 3. Удалить из Lovable
-- `supabase/functions/scrape-worker/`
-- `supabase/functions/scrape-diagnose/`
-- `supabase/functions/_shared/yandex-scrape.ts`
-- cron-задачу `scrape-worker-tick` (через миграцию)
-- секреты `RU_PROXY_LIST`, `CAPTCHA_API_KEY`, `CAPTCHA_PROVIDER`, `SCRAPE_WORKER_TOKEN` из Lovable (они переедут на VPS)
-
-`enqueue-check` остаётся как есть — UI кладёт задачу, воркер на VPS её забирает.
-
-### Часть 4. README для деплоя на VPS
-Будет содержать:
-
-```text
-1. Подключиться: ssh root@<IP>
-2. Скачать и запустить: curl -s https://raw.githubusercontent.com/<твой_репо>/main/worker/install.sh | bash
-   (или скопировать install.sh вручную и запустить)
-3. Скрипт сделает:
-   - apt update, установит Node.js 20, git, build-essential
-   - создаст пользователя `worker`
-   - склонирует репо в /home/worker/app
-   - установит npm зависимости в /home/worker/app/worker
-   - создаст /home/worker/app/worker/.env (попросит заполнить)
-   - установит PM2 глобально
-   - запустит воркер через PM2 + автозапуск при ребуте
-4. Заполнить .env (5 переменных, шаблон в .env.example)
-5. pm2 restart yandex-worker
-6. pm2 logs yandex-worker — увидеть «Polling… picked N jobs… done»
-7. Проверить в Lovable UI: жмёшь «Проверить» → через 5–15 сек появляется позиция
-```
-
-Также: как обновлять (`git pull && npm i && pm2 restart`), как смотреть логи, как добавить мониторинг (uptime kuma / healthchecks.io ping раз в минуту).
+- Cron-расписание (v2)
+- Сравнение с конкурентами в колдунщике (v2)
+- Мобильная выдача (v2)
+- Ручное переопределение region_id в UI (v2)
 
 ---
 
-## Технические детали (для ясности)
+## Технические детали
 
-**Почему Node, а не Deno:** в Node прокси через `undici.ProxyAgent` или `https-proxy-agent` гарантированно работает. В Deno (Supabase) — нет, мы это уже подтвердили диагностикой (IP выходил из Франкфурта).
-
-**Безопасность service-role ключа на VPS:** ключ лежит в `.env` с правами 600, читается только пользователем `worker`. Никаких HTTP-эндпоинтов воркер не открывает — только исходящие запросы. SSH под root отключим, оставим только по ключу (опционально, в инструкции).
-
-**Стоимость в месяц:**
-- VPS Timeweb: ~250–400 ₽
-- ProxyLine: уже куплен
-- RuCaptcha: ~$1 за 1000 капч (≈ 100 ₽)
-- Итого: ~400–500 ₽/мес
-
-**Масштабирование:** при росте — увеличить `BATCH_SIZE` и количество параллельных воркеров (PM2 cluster mode). На одном 1-CPU VPS реально жать 3000–5000 проверок в день.
+- **Geosearch API**: ключ есть, лимит ~25 000 запросов/сутки на дев-ключ, нашему сценарию хватает с запасом. Российский IP для него не требуется.
+- **Парсер колдунщика**: HTML Яндекса нестабилен — закладываем 3 разных селектора-паттерна и graceful fallback. При не-парсинге пишем `error_type='wizard_parse'` и `wizard_exists=null` (не false), чтобы не врать пользователю.
+- **Капча**: уже работает в `worker/src/captcha.ts` через RuCaptcha. Используем тот же solver для wizard-запросов.
+- **Обратная совместимость**: старое поле `checks.position` продолжаем заполнять = `maps_position`, чтобы не ломать существующие графики на проде до раскатки нового UI.
+- **Лимит 50 проверок/сутки** в `enqueue-check` — без изменений (одна проверка = одна job = и Карты, и колдунщик параллельно).
+- **Таймауты**: каждый из двух запросов — 15 сек, общий job — до 35 сек.
 
 ---
 
-## После одобрения этого плана я:
-1. Создам миграцию (UPDATE policy + индекс + удаление cron).
-2. Сгенерирую папку `worker/` со всем кодом, install.sh и подробным README.md на русском.
-3. Удалю из Lovable три edge-функции и shared-файл.
-4. Дам тебе чек-лист в чате: «купи VPS → залей ключи → запусти install.sh → заполни .env → готово».
+## Порядок реализации после одобрения
 
-Подтверждай — приступаю.
+1. Миграция БД (новые поля в `checks`, `organizations.yandex_region_id`).
+2. Обновить `search-org` — определять region_id, сохранять в БД.
+3. В `worker/`: новые `geosearch.ts`, `wizard.ts`, рефактор `index.ts`, обновить `.env.example` и README. Удалить `yandex.ts`.
+4. UI: расширить типы, переделать карточку статуса, график и таблицу.
+5. Чек-лист для тебя на VPS: `git pull && npm i && pm2 restart yandex-worker` + добавить `YANDEX_GEOSEARCH_API_KEY` в `.env`.
+
+Подтверждай — начинаю.

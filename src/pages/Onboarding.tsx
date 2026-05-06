@@ -16,7 +16,14 @@ interface OrgResult {
   yandex_id: string;
   lat: number;
   lon: number;
+  region_id?: number;
 }
+
+const REGION_NAMES: Record<number, string> = {
+  213: "Москва", 2: "Санкт-Петербург", 54: "Екатеринбург", 65: "Новосибирск",
+  43: "Казань", 47: "Нижний Новгород", 35: "Краснодар", 39: "Ростов-на-Дону",
+  51: "Самара", 172: "Уфа",
+};
 
 const MAX_KEYWORDS = 3;
 const MAX_GEOPOINTS = 3;
@@ -90,6 +97,7 @@ export default function Onboarding() {
         address: selected.address,
         lat: selected.lat,
         lon: selected.lon,
+        yandex_region_id: selected.region_id ?? 213,
       })
       .select("id, lat, lon")
       .single();
@@ -227,6 +235,11 @@ export default function Onboarding() {
                     >
                       <div className="font-medium">{r.name}</div>
                       <div className="text-sm text-muted-foreground">{r.address}</div>
+                      {r.region_id && (
+                        <div className="text-xs text-muted-foreground mt-1">
+                          Регион Яндекса: {REGION_NAMES[r.region_id] ?? "—"} ({r.region_id})
+                        </div>
+                      )}
                     </button>
                   ))}
                 </div>
