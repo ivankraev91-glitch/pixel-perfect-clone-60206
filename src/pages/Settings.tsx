@@ -137,19 +137,27 @@ export default function Settings() {
         </Card>
 
         <Card>
-          <CardHeader>
-            <CardTitle>Ключевые запросы</CardTitle>
-            <CardDescription>До {MAX_KW} запросов</CardDescription>
+          <CardHeader className="flex-row items-start justify-between gap-2 space-y-0">
+            <div>
+              <CardTitle>Ключевые запросы</CardTitle>
+              <CardDescription>Без ограничения. Частотность по региону карточки.</CardDescription>
+            </div>
+            <Button variant="outline" size="sm" onClick={refreshAll}
+              disabled={refreshingAll || keywords.length === 0}>
+              <RefreshCw className={`h-4 w-4 mr-1 ${refreshingAll ? "animate-spin" : ""}`} />
+              Обновить частотности
+            </Button>
           </CardHeader>
           <CardContent className="space-y-3">
             <div className="flex gap-2">
               <Input value={kwInput} onChange={(e) => setKwInput(e.target.value)} placeholder="новый запрос"
                 onKeyDown={(e) => e.key === "Enter" && (e.preventDefault(), addKw())} />
-              <Button onClick={addKw} disabled={keywords.length >= MAX_KW}><Plus className="h-4 w-4" /></Button>
+              <Button onClick={addKw}><Plus className="h-4 w-4" /></Button>
             </div>
             {keywords.map((k) => (
-              <div key={k.id} className="flex items-center justify-between bg-muted px-3 py-2 rounded-lg">
-                <span>{k.keyword}</span>
+              <div key={k.id} className="flex items-center justify-between bg-muted px-3 py-2 rounded-lg gap-2">
+                <span className="flex-1 truncate">{k.keyword}</span>
+                <FrequencyBadge k={k} onRefresh={() => enqueueFreq([k.id])} />
                 <button onClick={() => delKw(k.id)}><X className="h-4 w-4 text-muted-foreground" /></button>
               </div>
             ))}
