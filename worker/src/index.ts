@@ -1,6 +1,6 @@
 import "dotenv/config";
 import { db } from "./db.js";
-import { geosearchPosition } from "./geosearch.js";
+import { mapsScrapePosition } from "./maps.js";
 import { wizardCheck } from "./wizard.js";
 import { wordstatLookup } from "./wordstat.js";
 
@@ -52,9 +52,9 @@ async function tick(): Promise<number> {
       const orgYid = String(org.yandex_id);
       const regionId = Number(org.yandex_region_id ?? 213);
 
-      // Run both checks in parallel
+      // Run both checks in parallel (both go through RU proxy + captcha now)
       const [mapsRes, wizRes] = await Promise.allSettled([
-        withTimeout(geosearchPosition(kw.keyword, { lat: gp.lat, lon: gp.lon }, orgYid), 15000, "geosearch"),
+        withTimeout(mapsScrapePosition(kw.keyword, { lat: gp.lat, lon: gp.lon }, orgYid), 30000, "maps"),
         withTimeout(wizardCheck(kw.keyword, regionId, orgYid, org.name ?? ""), 25000, "wizard"),
       ]);
 
