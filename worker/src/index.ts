@@ -2,6 +2,7 @@ import "dotenv/config";
 import { db } from "./db.js";
 import { geosearchPosition } from "./geosearch.js";
 import { wizardCheck } from "./wizard.js";
+import { wordstatLookup } from "./wordstat.js";
 
 const POLL_MS = Number(process.env.WORKER_POLL_INTERVAL_MS ?? 5000);
 const BATCH_SIZE = Number(process.env.WORKER_BATCH_SIZE ?? 5);
