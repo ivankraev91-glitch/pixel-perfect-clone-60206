@@ -235,6 +235,11 @@ export default function Onboarding() {
                     >
                       <div className="font-medium">{r.name}</div>
                       <div className="text-sm text-muted-foreground">{r.address}</div>
+                      {r.region_id && (
+                        <div className="text-xs text-muted-foreground mt-1">
+                          Регион Яндекса: {REGION_NAMES[r.region_id] ?? "—"} ({r.region_id})
+                        </div>
+                      )}
                     </button>
                   ))}
                 </div>
