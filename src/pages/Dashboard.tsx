@@ -322,7 +322,11 @@ export default function Dashboard() {
             <Select value={selKw} onValueChange={setSelKw}>
               <SelectTrigger><SelectValue placeholder="Ключевое слово" /></SelectTrigger>
               <SelectContent>
-                {keywords.map((k) => <SelectItem key={k.id} value={k.id}>{k.keyword}</SelectItem>)}
+                {keywords.map((k) => (
+                  <SelectItem key={k.id} value={k.id}>
+                    {k.keyword}{k.frequency != null ? ` · ${k.frequency.toLocaleString("ru-RU")}/мес` : ""}
+                  </SelectItem>
+                ))}
               </SelectContent>
             </Select>
             <Select value={selGp} onValueChange={setSelGp}>
