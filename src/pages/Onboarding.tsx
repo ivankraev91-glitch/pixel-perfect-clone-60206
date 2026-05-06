@@ -33,9 +33,6 @@ export default function Onboarding() {
   const [step, setStep] = useState(1);
 
   // step 1
-  const [mode, setMode] = useState<"search" | "url">("search");
-  const [query, setQuery] = useState("");
-  const [city, setCity] = useState("");
   const [orgUrl, setOrgUrl] = useState("");
   const [searching, setSearching] = useState(false);
   const [results, setResults] = useState<OrgResult[]>([]);
@@ -67,14 +64,13 @@ export default function Onboarding() {
   }, [user, loading, navigate]);
 
   const search = async () => {
-    const body = mode === "url" ? { url: orgUrl } : { query, city };
-    if (mode === "url" ? !orgUrl.trim() : !query.trim()) return;
+    if (!orgUrl.trim()) return;
     setSearching(true);
-    const { data, error } = await supabase.functions.invoke("search-org", { body });
+    const { data, error } = await supabase.functions.invoke("search-org", { body: { url: orgUrl } });
     setSearching(false);
     if (error) {
       const msg = (data as any)?.error || error.message || "Неизвестная ошибка";
-      toast.error("Ошибка поиска: " + msg);
+      toast.error("Ошибка: " + msg);
       return;
     }
     const list = data?.results ?? [];
