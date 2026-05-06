@@ -25,7 +25,6 @@ const REGION_NAMES: Record<number, string> = {
   51: "Самара", 172: "Уфа",
 };
 
-const MAX_KEYWORDS = 3;
 const MAX_GEOPOINTS = 3;
 
 export default function Onboarding() {
