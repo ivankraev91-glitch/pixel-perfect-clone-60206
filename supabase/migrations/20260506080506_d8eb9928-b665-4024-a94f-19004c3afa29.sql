@@ -1,0 +1,1 @@
+select vault.create_secret('81c0bea94eb1fbec8a423959cb6db8c57df89d664f5e55978856ccb484a173d7', 'SCRAPE_WORKER_TOKEN', 'Token used by pg_cron to call scrape-worker edge function');
