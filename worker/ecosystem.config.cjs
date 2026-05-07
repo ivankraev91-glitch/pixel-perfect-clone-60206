@@ -8,7 +8,7 @@ module.exports = {
       autorestart: true,
       max_restarts: 20,
       restart_delay: 5000,
-      max_memory_restart: "400M",
+      max_memory_restart: "900M",
       env: { NODE_ENV: "production" },
       out_file: "logs/out.log",
       error_file: "logs/err.log",
