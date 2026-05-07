@@ -47,6 +47,11 @@ cd "$APP_DIR/worker"
 sudo -u "$WORKER_USER" npm install
 sudo -u "$WORKER_USER" npx tsc -p .
 
+echo "==> playwright + chromium (для browser-fallback на Я.Картах)"
+sudo -u "$WORKER_USER" npx playwright install chromium
+# системные либы для chromium (требует root)
+npx playwright install-deps chromium || true
+
 echo "==> .env"
 if [ ! -f "$APP_DIR/worker/.env" ]; then
   sudo -u "$WORKER_USER" cp "$APP_DIR/worker/.env.example" "$APP_DIR/worker/.env"

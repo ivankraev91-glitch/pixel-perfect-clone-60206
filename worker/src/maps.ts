@@ -123,7 +123,30 @@ export async function mapsScrapePosition(
     await recordHealth(session.proxy, true);
     const ids = parseMapsSerp(body);
     if (ids.length === 0) {
-      // SERP returned, but we couldn't find any org cards — treat as not indexed.
+      // SSR returned no cards — Maps is a SPA, sometimes the inline list is empty.
+      // Fall back to a real browser if enabled.
+      if (process.env.WORKER_BROWSER_FALLBACK === "true") {
+        try {
+          const { mapsBrowserPosition } = await import("./mapsBrowser.js");
+          const br = await mapsBrowserPosition(keyword, ll, ourOrgId);
+          if (br.ok) {
+            // Best-effort telemetry: how often the browser path saves us.
+            // Keep noise low — only alert on a positive find.
+            if (br.indexed) {
+              await import("./db.js").then(({ db }) =>
+                db.from("system_alerts").insert({
+                  kind: "maps_browser_fallback_hit",
+                  message: `kw="${keyword}" pos=${br.position}/${br.total}`,
+                }).then(() => {}),
+              ).catch(() => {});
+            }
+            return { ok: true, indexed: br.indexed, position: br.position, total: br.total };
+          }
+        } catch (e: any) {
+          // Browser not installed or crashed — just return the SSR result.
+          console.warn("[maps] browser fallback failed:", e?.message ?? e);
+        }
+      }
       return { ok: true, indexed: false, position: null, total: 0 };
     }
     const idx = ids.indexOf(String(ourOrgId));
