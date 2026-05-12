@@ -30,14 +30,23 @@ const COMMANDS: Record<string, string> = {
 
 function normalizeKey(raw: string): string {
   let k = raw.trim();
-  // Литеральные \n и \r\n → настоящие переносы
+  // Если это base64 (нет "BEGIN") — декодируем
+  if (!k.includes("BEGIN")) {
+    try {
+      const decoded = new TextDecoder().decode(
+        Uint8Array.from(atob(k.replace(/\s+/g, "")), (c) => c.charCodeAt(0)),
+      );
+      if (decoded.includes("BEGIN")) k = decoded.trim();
+    } catch { /* not base64 */ }
+  }
+  // Литеральные \n → настоящие
   k = k.replace(/\\r\\n/g, "\n").replace(/\\n/g, "\n").replace(/\r/g, "");
-  // Если переносы потерялись и весь ключ в одну строку — восстанавливаем
+  // Если переносы потерялись и ключ в одну строку — восстанавливаем 70-символьными блоками (OpenSSH)
   if (!k.includes("\n") && k.includes("-----BEGIN")) {
     const m = k.match(/^(-----BEGIN [^-]+-----)\s*([\s\S]+?)\s*(-----END [^-]+-----)\s*$/);
     if (m) {
       const body = m[2].replace(/\s+/g, "");
-      const wrapped = body.match(/.{1,64}/g)?.join("\n") ?? body;
+      const wrapped = body.match(/.{1,70}/g)?.join("\n") ?? body;
       k = `${m[1]}\n${wrapped}\n${m[3]}\n`;
     }
   }
