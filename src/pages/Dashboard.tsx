@@ -57,6 +57,7 @@ function StatusBadge({ check }: { check: Check | null | undefined }) {
 
 export default function Dashboard() {
   const { user, signOut } = useAuth();
+  const { isAdmin } = useIsAdmin();
   const navigate = useNavigate();
   const [org, setOrg] = useState<Org | null>(null);
   const [keywords, setKeywords] = useState<Kw[]>([]);
