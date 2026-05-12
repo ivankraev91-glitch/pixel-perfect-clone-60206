@@ -173,11 +173,6 @@ export default function Dashboard() {
             <Button variant="ghost" size="sm" asChild>
               <Link to="/settings"><Settings className="h-4 w-4 mr-2" />Настройки</Link>
             </Button>
-            {isAdmin && (
-              <Button variant="ghost" size="sm" asChild>
-                <Link to="/worker"><Server className="h-4 w-4 mr-2" />Воркер</Link>
-              </Button>
-            )}
             <Button variant="ghost" size="sm" onClick={() => signOut().then(() => navigate("/auth"))}>
               <LogOut className="h-4 w-4" />
             </Button>
