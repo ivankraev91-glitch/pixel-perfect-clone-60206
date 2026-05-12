@@ -10,7 +10,8 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, Legend } from "recharts";
 import { toast } from "sonner";
-import { MapPin, Settings, LogOut, Loader2, Search } from "lucide-react";
+import { MapPin, Settings, LogOut, Loader2, Search, Server } from "lucide-react";
+import { useIsAdmin } from "@/hooks/useIsAdmin";
 
 interface Org { id: string; name: string; city: string | null; address: string | null; }
 interface Kw { id: string; keyword: string; frequency: number | null; }
