@@ -28,6 +28,23 @@ const COMMANDS: Record<string, string> = {
   logs: `pm2 logs yandex-worker --lines 200 --nostream --raw`,
 };
 
+function normalizeKey(raw: string): string {
+  let k = raw.trim();
+  // Литеральные \n и \r\n → настоящие переносы
+  k = k.replace(/\\r\\n/g, "\n").replace(/\\n/g, "\n").replace(/\r/g, "");
+  // Если переносы потерялись и весь ключ в одну строку — восстанавливаем
+  if (!k.includes("\n") && k.includes("-----BEGIN")) {
+    const m = k.match(/^(-----BEGIN [^-]+-----)\s*([\s\S]+?)\s*(-----END [^-]+-----)\s*$/);
+    if (m) {
+      const body = m[2].replace(/\s+/g, "");
+      const wrapped = body.match(/.{1,64}/g)?.join("\n") ?? body;
+      k = `${m[1]}\n${wrapped}\n${m[3]}\n`;
+    }
+  }
+  if (!k.endsWith("\n")) k += "\n";
+  return k;
+}
+
 function runSsh(cmd: string, timeoutMs = 120_000): Promise<{ code: number; stdout: string; stderr: string }> {
   return new Promise((resolve, reject) => {
     if (!SSH_HOST || !SSH_KEY) {
