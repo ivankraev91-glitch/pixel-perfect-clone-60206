@@ -78,7 +78,7 @@ function runSsh(cmd: string, timeoutMs = 120_000): Promise<{ code: number; stdou
         host: SSH_HOST,
         port: SSH_PORT,
         username: SSH_USER,
-        privateKey: SSH_KEY,
+        privateKey: normalizeKey(SSH_KEY),
         readyTimeout: 15_000,
       });
   });
